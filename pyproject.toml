@@ -1,0 +1,14 @@
+[project]
+name = "scriva-backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "fastapi>=0.136.1",
+    "google-api-python-client>=2.196.0",
+    "google-genai>=2.0.0",
+    "pytube>=15.0.0",
+    "requests>=2.33.1",
+]
