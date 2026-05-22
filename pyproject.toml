@@ -11,4 +11,5 @@ dependencies = [
     "google-genai>=2.0.0",
     "pytube>=15.0.0",
     "requests>=2.33.1",
+    "ruff>=0.15.14",
 ]
