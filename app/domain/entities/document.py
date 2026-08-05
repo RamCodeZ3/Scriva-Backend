@@ -35,6 +35,7 @@ class Document:
     Pure business logic — no frameworks, no external dependencies.
     """
     id: UUID
+    user_id: UUID
     title: str
     document_type: DocumentType
     source: Source
@@ -51,6 +52,7 @@ class Document:
     @classmethod
     def create(
         cls,
+        user_id: UUID
         title: str,
         document_type: DocumentType,
         source: Source,
@@ -60,6 +62,7 @@ class Document:
         now = datetime.utcnow()
         return cls(
             id=uuid4(),
+            user_id=user_id,
             title=title,
             document_type=document_type,
             source=source,

@@ -4,3 +4,7 @@ class DocumentBuildError(Exception):
 
 class InvalidSourceError(Exception):
     """Raised when the input source cannot be resolved or extracted."""
+
+
+class UserDomainError(Exception):
+    """Raised when a user is invalid"""
