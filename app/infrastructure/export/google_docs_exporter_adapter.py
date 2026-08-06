@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -11,35 +11,21 @@ from domain.exceptions import DocumentBuildError
 
 from application.ports.document_exporter_port import DocumentExporterPort
 
-_SCOPES = [
-    "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/drive.file",
-]
-
 
 class GoogleDocsExporterAdapter(DocumentExporterPort):
     """
-    Creates a Google Doc from the finished `Document`, writes each APA
-    section as a heading + paragraph, and shares it with "anyone with
-    the link can view" so `export_url` is immediately usable.
-
-    This gives you a working baseline; refine `_build_requests` with
-    the actual APA 7 formatting rules you need (font, margins, spacing,
-    page numbers, running head, etc.) via the Docs API's paragraph and
-    text style requests.
+    Creates a Google Doc directly in the user's Google Drive account
+    using their OAuth 2.0 access token.
     """
 
-    def __init__(self, service_account_file: str) -> None:
-        self._credentials = service_account.Credentials.from_service_account_file(
-            service_account_file, scopes=_SCOPES
-        )
+    def __init__(self, user_access_token: str) -> None:
+        self._credentials = Credentials(token=user_access_token)
 
     async def export(self, document: Document) -> str:
         return await asyncio.to_thread(self._export_sync, document)
 
     def _export_sync(self, document: Document) -> str:
         docs_service = build("docs", "v1", credentials=self._credentials)
-        drive_service = build("drive", "v3", credentials=self._credentials)
 
         try:
             doc = docs_service.documents().create(body={"title": document.title}).execute()
@@ -50,11 +36,6 @@ class GoogleDocsExporterAdapter(DocumentExporterPort):
                 docs_service.documents().batchUpdate(
                     documentId=document_id, body={"requests": requests}
                 ).execute()
-
-            drive_service.permissions().create(
-                fileId=document_id,
-                body={"role": "reader", "type": "anyone"},
-            ).execute()
 
         except HttpError as exc:
             raise DocumentBuildError(f"Google Docs export failed: {exc}") from exc
