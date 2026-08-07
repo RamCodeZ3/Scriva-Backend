@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import APASection, APASectionType
@@ -35,14 +36,11 @@ _SYSTEM_INSTRUCTION = (
 
 
 class GeminiDocumentWriterAdapter(DocumentWriterPort):
-    """Adapter for `DocumentWriterPort` backed by the Gemini API."""
+    """Adapter for `DocumentWriterPort` backed by the official `google-genai` SDK."""
 
     def __init__(self, api_key: str, model_name: str = "gemini-2.5-pro") -> None:
-        genai.configure(api_key=api_key)
-        self._model = genai.GenerativeModel(
-            model_name=model_name,
-            system_instruction=_SYSTEM_INSTRUCTION,
-        )
+        self._client = genai.Client(api_key=api_key)
+        self._model_name = model_name
 
     async def write(
         self,
@@ -60,9 +58,14 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         )
 
         try:
-            response = await self._model.generate_content_async(
-                prompt,
-                generation_config={"response_mime_type": "application/json"},
+            # Usamos el cliente asíncrono `.aio` de la nueva librería
+            response = await self._client.aio.models.generate_content(
+                model=self._model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=_SYSTEM_INSTRUCTION,
+                    response_mime_type="application/json",
+                ),
             )
             raw_text = response.text
         except Exception as exc:

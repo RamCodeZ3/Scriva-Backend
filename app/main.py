@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import uvicorn
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from application.exceptions import (
+    ApplicationError,
+    DocumentNotFoundError,
+    SourceNotFoundError,
+    UnsupportedSourceTypeError,
+    UserAlreadyExistsError,
+    UserNotFoundError,
+)
+
+from api.v1.documents import router as documents_router
+
+app = FastAPI(title="APA Document Generator API")
+
+app.include_router(documents_router)
+
+
+# ── Error handling ───────────────────────────────────────────────────────
+# Starlette resolves handlers by walking the exception's MRO, so the
+# most specific registered class always wins over the generic
+# ApplicationError fallback below — registration order doesn't matter.
+
+@app.exception_handler(UserNotFoundError)
+async def user_not_found_handler(request: Request, exc: UserNotFoundError) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(DocumentNotFoundError)
+async def document_not_found_handler(
+    request: Request, exc: DocumentNotFoundError
+) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(SourceNotFoundError)
+async def source_not_found_handler(request: Request, exc: SourceNotFoundError) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(UnsupportedSourceTypeError)
+async def unsupported_source_type_handler(
+    request: Request, exc: UnsupportedSourceTypeError
+) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(UserAlreadyExistsError)
+async def user_already_exists_handler(
+    request: Request, exc: UserAlreadyExistsError
+) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(ApplicationError)
+async def application_error_handler(request: Request, exc: ApplicationError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

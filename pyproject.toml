@@ -9,7 +9,11 @@ dependencies = [
     "fastapi>=0.136.1",
     "google-api-python-client>=2.196.0",
     "google-genai>=2.0.0",
+    "jwt>=1.4.0",
+    "playwright>=1.62.0",
     "pytube>=15.0.0",
     "requests>=2.33.1",
     "ruff>=0.15.14",
+    "supabase>=2.31.0",
+    "uvicorn>=0.52.1",
 ]
