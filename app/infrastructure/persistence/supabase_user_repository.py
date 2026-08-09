@@ -57,7 +57,7 @@ class SupabaseUserRepository(UserRepositoryPort):
         return {
             "id": str(user.id),
             "email": user.email,
-            "name": user.name,
+            "display_name": user.name,
             "is_premium": user.is_premium,
             "created_at": user.created_at.isoformat(),
             "updated_at": user.updated_at.isoformat(),
@@ -68,7 +68,7 @@ class SupabaseUserRepository(UserRepositoryPort):
         return User(
             id=UUID(row["id"]),
             email=row["email"],
-            name=row["name"],
+            name=row["display_name"],
             is_premium=row["is_premium"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),

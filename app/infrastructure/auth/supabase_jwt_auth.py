@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import jwt
+from jwt import PyJWKClient
+from dotenv import load_dotenv
 
+load_dotenv()
 
 class InvalidTokenError(Exception):
     """Raised when the bearer token is missing, malformed, or expired."""
@@ -9,30 +12,72 @@ class InvalidTokenError(Exception):
 
 class SupabaseJWTAuth:
     """
-    Verifies a Supabase Auth JWT and returns its payload.
+    Verifies a Supabase Auth JWT.
 
-    Supabase signs access tokens with the project's JWT secret (HS256)
-    by default — find it in Project Settings -> API -> JWT Secret.
-    The `sub` claim is the Supabase Auth user id (what we call
-    `auth_id` in the `users` table).
+    Supabase now signs access tokens with asymmetric JWT Signing Keys
+    (ES256/RSA) by default, verifiable locally against the project's
+    public JWKS — no shared secret involved. `PyJWKClient` fetches and
+    caches those public keys, matching the right one via the token's
+    `kid` header.
+
+    Two things Supabase's docs don't make obvious:
+      - The JWKS endpoint is `/auth/v1/.well-known/jwks.json`, not
+        `/auth/v1/jwks`.
+      - Every `/auth/v1/*` route, including the JWKS one, requires the
+        project's `apikey` header (anon/publishable key) or it 401s
+        before it even looks at what you asked for.
+
+    If your project hasn't migrated off the legacy shared HS256 secret
+    yet (or is mid-migration and can still issue legacy tokens), pass
+    `legacy_secret` too — both old and new tokens verify correctly
+    during the transition.
     """
 
     def __init__(
         self,
-        jwt_secret: str,
-        algorithm: str = "HS256",
+        project_url: str,
+        api_key: str,
         audience: str = "authenticated",
+        legacy_secret: str | None = None,
     ) -> None:
-        self._secret = jwt_secret
-        self._algorithm = algorithm
+        jwks_url = f"{project_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+        self._jwks_client = PyJWKClient(
+            jwks_url,
+            headers={"apikey": api_key},
+            cache_keys=True,
+        )
         self._audience = audience
+        self._legacy_secret = legacy_secret
 
     def decode(self, token: str) -> dict:
         try:
+            header = jwt.get_unverified_header(token)
+        except jwt.PyJWTError as exc:
+            raise InvalidTokenError(str(exc)) from exc
+
+        # Legacy HS256 tokens aren't resolvable via JWKS (no matching
+        # public key) — verify those against the shared secret instead.
+        if header.get("alg") == "HS256":
+            if not self._legacy_secret:
+                raise InvalidTokenError(
+                    "Received a legacy HS256 token but no legacy_secret was configured."
+                )
+            try:
+                return jwt.decode(
+                    token,
+                    self._legacy_secret,
+                    algorithms=["HS256"],
+                    audience=self._audience,
+                )
+            except jwt.PyJWTError as exc:
+                raise InvalidTokenError(str(exc)) from exc
+
+        try:
+            signing_key = self._jwks_client.get_signing_key_from_jwt(token)
             return jwt.decode(
                 token,
-                self._secret,
-                algorithms=[self._algorithm],
+                signing_key.key,
+                algorithms=["ES256", "RS256"],
                 audience=self._audience,
             )
         except jwt.PyJWTError as exc:

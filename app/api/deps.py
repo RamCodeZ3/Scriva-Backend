@@ -52,7 +52,11 @@ def get_supabase_client():
 
 @lru_cache
 def get_jwt_auth() -> SupabaseJWTAuth:
-    return SupabaseJWTAuth(jwt_secret=os.environ["SUPABASE_JWT_SECRET"])
+    return SupabaseJWTAuth(
+        project_url=os.environ["SUPABASE_URL"],
+        api_key=os.environ["SUPABASE_ANON_KEY"],
+        legacy_secret=os.environ.get("SUPABASE_JWT_SECRET"),
+    )
 
 
 @lru_cache
