@@ -21,24 +21,6 @@ from application.ports.source_repository_port import SourceRepositoryPort
 
 
 class SupabaseDocumentRepository(DocumentRepositoryPort):
-    """
-    Expects a `documents` table:
-      id uuid pk, user_id uuid, title text, document_type text,
-      source_id uuid (fk -> sources.id), presentation jsonb,
-      status text, sections jsonb, sources jsonb,
-      created_at timestamptz, updated_at timestamptz,
-      error_message text nullable,
-      document_url text nullable,          -- ExportResult.url (Google Docs)
-      export_file_name text nullable,      -- ExportResult.file_name (PDF)
-      export_content_type text nullable,   -- ExportResult.content_type (PDF)
-      export_storage_path text nullable    -- ExportResult.storage_path (PDF, local disk)
-
-    NOTE: `ExportResult.file_bytes` is intentionally NEVER persisted
-    here — PDFs stay on local disk only (`storage_path`); nothing
-    binary goes into Postgres for now. If that changes later, this is
-    the one place to add it (e.g. a Supabase Storage bucket column).
-    """
-
     _TABLE = "documents"
     _EXPORT_COLUMNS = (
         "document_url",
@@ -80,19 +62,15 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
         row = await asyncio.to_thread(self._get_row_sync, str(document_id))
         if row is None:
             return None
-
         if not any(row.get(col) for col in self._EXPORT_COLUMNS):
-            return None  # nothing exported (yet)
-
+            return None
         return ExportResult(
             url=row.get("document_url"),
-            file_bytes=None,  # never persisted — see class docstring
+            file_bytes=None,
             file_name=row.get("export_file_name"),
             content_type=row.get("export_content_type"),
             storage_path=row.get("export_storage_path"),
         )
-
-    # ── sync helpers (run inside a thread) ──────────────────────────────
 
     def _save_sync(self, document: Document) -> None:
         self._client.table(self._TABLE).upsert(self._to_row(document)).execute()
@@ -114,15 +92,13 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
     def _update_fields_sync(self, document_id: str, fields: dict) -> None:
         self._client.table(self._TABLE).update(fields).eq("id", document_id).execute()
 
-    # ── mapping ──────────────────────────────────────────────────────────
-
     def _to_row(self, document: Document) -> dict:
         return {
             "id": str(document.id),
             "user_id": str(document.user_id),
             "title": document.title,
             "document_type": document.document_type.value,
-            "source_id": str(document.source.id),
+            "source_ids": [str(s.id) for s in document.raw_sources],
             "presentation": _to_jsonable(document.presentation),
             "status": document.status.value,
             "sections": [_to_jsonable(s) for s in document.sections],
@@ -130,21 +106,23 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             "created_at": document.created_at.isoformat(),
             "updated_at": document.updated_at.isoformat(),
             "error_message": document.error_message,
+            "export_target": document.export_target,
         }
 
     async def _to_entity(self, row: dict) -> Document:
-        source = await self._sources.get_by_id(UUID(row["source_id"]))
-        if source is None:
-            raise ValueError(
-                f"Document '{row['id']}' references a missing source '{row['source_id']}'."
-            )
+        raw_sources = []
+        for sid in row.get("source_ids") or []:
+            source = await self._sources.get_by_id(UUID(sid))
+            if source is None:
+                raise ValueError(f"Document '{row['id']}' references a missing source '{sid}'.")
+            raw_sources.append(source)
 
         return Document(
             id=UUID(row["id"]),
             user_id=UUID(row["user_id"]),
             title=row["title"],
             document_type=DocumentType(row["document_type"]),
-            source=source,
+            raw_sources=raw_sources,
             presentation=PresentationInfo(**row["presentation"]),
             status=DocumentStatus(row["status"]),
             sections=[_section_from_dict(s) for s in row["sections"]],
@@ -152,6 +130,7 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             error_message=row.get("error_message"),
+            export_target=row.get("export_target", "pdf"),
         )
 
 

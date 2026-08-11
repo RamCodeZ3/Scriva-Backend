@@ -14,32 +14,26 @@ from domain.exceptions import DocumentBuildError
 
 @dataclass(frozen=True)
 class SourceInput:
-    """Represents the raw source before extraction."""
-    raw: str                  # URL, plain text, or file path
-    source_type: str          # "web" | "youtube" | "file" | "text"
+    raw: str
+    source_type: str
     lang: str = "en"
 
 
 class DocumentStatus(Enum):
-    PENDING    = "pending"      # just created, no content yet
-    EXTRACTING = "extracting"   # source is being extracted
-    GENERATING = "generating"   # Gemini is drafting the document
-    DONE       = "done"         # ready to export
-    FAILED     = "failed"       # something went wrong
+    PENDING    = "pending"
+    EXTRACTING = "extracting"
+    GENERATING = "generating"
+    DONE       = "done"
+    FAILED     = "failed"
 
 
 @dataclass
 class Document:
-    """
-    Aggregate root.
-    Represents the fully generated document.
-    Pure business logic — no frameworks, no external dependencies.
-    """
     id: UUID
     user_id: UUID
     title: str
     document_type: DocumentType
-    source: Source
+    raw_sources: list[Source]
     presentation: PresentationInfo
     status: DocumentStatus
     sections: list[APASection]
@@ -47,15 +41,7 @@ class Document:
     created_at: datetime
     updated_at: datetime
     error_message: str | None = None
-    # "google" | "pdf" — which DocumentExporterPort to resolve once the
-    # draft is DONE. Lives on the aggregate (rather than being passed
-    # around as a loose parameter) because it's part of what this
-    # specific document was requested to become, same spirit as
-    # `document_type`. Defaults to "pdf" since that path needs no
-    # external account.
     export_target: str = "pdf"
-
-    # ── Factory method ────────────────────────────────────────────────────────
 
     @classmethod
     def create(
@@ -63,18 +49,20 @@ class Document:
         user_id: UUID,
         title: str,
         document_type: DocumentType,
-        source: Source,
+        raw_sources: list[Source],
         presentation: PresentationInfo,
         export_target: str = "pdf",
     ) -> Document:
-        """Creates a new Document in PENDING status."""
+        if not raw_sources:
+            raise DocumentBuildError("A document needs at least one source.")
+
         now = datetime.utcnow()
         return cls(
             id=uuid4(),
             user_id=user_id,
             title=title,
             document_type=document_type,
-            source=source,
+            raw_sources=raw_sources,
             presentation=presentation,
             status=DocumentStatus.PENDING,
             sections=[],
@@ -83,8 +71,6 @@ class Document:
             updated_at=now,
             export_target=export_target,
         )
-
-    # ── State transitions ─────────────────────────────────────────────────────
 
     def start_extraction(self) -> None:
         self._assert_status(DocumentStatus.PENDING)
@@ -96,11 +82,7 @@ class Document:
         self.status = DocumentStatus.GENERATING
         self._touch()
 
-    def complete(
-        self,
-        sections: list[APASection],
-        sources: list[SourceReference],
-    ) -> None:
+    def complete(self, sections: list[APASection], sources: list[SourceReference]) -> None:
         self._assert_status(DocumentStatus.GENERATING)
 
         if not sections:
@@ -120,8 +102,8 @@ class Document:
             raise DocumentBuildError(f"Missing required APA sections: {names}")
 
         self.sections = sorted(sections, key=lambda s: s.section_type.order)
-        self.sources  = sources
-        self.status   = DocumentStatus.DONE
+        self.sources = sources
+        self.status = DocumentStatus.DONE
         self._touch()
 
     def fail(self, reason: str) -> None:
@@ -129,21 +111,16 @@ class Document:
         self.error_message = reason
         self._touch()
 
-    # ── Queries ───────────────────────────────────────────────────────────────
-
     def is_ready(self) -> bool:
         return self.status == DocumentStatus.DONE
 
     def get_section(self, section_type: APASectionType) -> APASection | None:
         return next((s for s in self.sections if s.section_type == section_type), None)
 
-    # ── Private helpers ───────────────────────────────────────────────────────
-
     def _assert_status(self, expected: DocumentStatus) -> None:
         if self.status != expected:
             raise DocumentBuildError(
-                f"Invalid operation: document is '{self.status.value}', "
-                f"expected '{expected.value}'."
+                f"Invalid operation: document is '{self.status.value}', expected '{expected.value}'."
             )
 
     def _touch(self) -> None:

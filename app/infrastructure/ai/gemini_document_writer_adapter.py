@@ -13,10 +13,6 @@ from domain.value_objects.source_ref import SourceReference
 
 from application.ports.document_writer_port import DocumentWriterPort
 
-# NOTE — assumed value-object shapes (adjust `_parse_response` if yours differ):
-#   APASection(section_type: APASectionType, title: str, content: str)
-#   SourceReference(author: str, year: str, title: str, url: str | None)
-
 _SECTION_ORDER = [
     APASectionType.PRESENTATION,
     APASectionType.INDEX,
@@ -36,8 +32,6 @@ _SYSTEM_INSTRUCTION = (
 
 
 class GeminiDocumentWriterAdapter(DocumentWriterPort):
-    """Adapter for `DocumentWriterPort` backed by the official `google-genai` SDK."""
-
     def __init__(self, api_key: str, model_name: str = "gemini-3.5-flash") -> None:
         self._client = genai.Client(api_key=api_key)
         self._model_name = model_name
@@ -58,13 +52,13 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         )
 
         try:
-            # Usamos el cliente asíncrono `.aio` de la nueva librería
             response = await self._client.aio.models.generate_content(
                 model=self._model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=_SYSTEM_INSTRUCTION,
                     response_mime_type="application/json",
+                    temperature=0.3,
                 ),
             )
             raw_text = response.text
@@ -72,8 +66,6 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             raise DocumentBuildError(f"Gemini request failed: {exc}") from exc
 
         return self._parse_response(raw_text)
-
-    # ── Prompting ────────────────────────────────────────────────────────
 
     def _build_prompt(
         self,
@@ -112,13 +104,18 @@ Respond with a single JSON object shaped exactly like this:
 --- SOURCE MATERIAL END ---
 """.strip()
 
-    # ── Response parsing ────────────────────────────────────────────────
-
     def _parse_response(
         self, raw_text: str
     ) -> tuple[list[APASection], list[SourceReference]]:
+        text = raw_text.strip()
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.lower().startswith("json"):
+                text = text[4:]
+            text = text.strip()
+
         try:
-            data = json.loads(raw_text)
+            data, _ = json.JSONDecoder().raw_decode(text)
         except json.JSONDecodeError as exc:
             raise DocumentBuildError(f"Gemini did not return valid JSON: {exc}") from exc
 

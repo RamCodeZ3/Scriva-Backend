@@ -1,29 +1,25 @@
 from application.dtos.document_dtos import CreateDocumentInput, CreateDocumentOutput
-from application.exceptions import UnsupportedSourceTypeError, UserNotFoundError
+from application.exceptions import UserNotFoundError
 from application.ports.document_job_dispatcher_port import DocumentJobDispatcherPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.source_repository_port import SourceRepositoryPort
 from application.ports.user_repository_port import UserRepositoryPort
 
 from domain.entities.document import Document
-from domain.entities.source import Source, SourceType
+from domain.entities.source import Source
 
 
 class CreateDocumentUseCase:
     """
     Registers the request (validates the user, creates the `Source`
-    and `Document` aggregates in PENDING status, persists them) and
-    hands the extraction + IA + export pipeline to `job_dispatcher`.
+    entities and the `Document` aggregate in PENDING status, persists
+    them) and hands the extraction + IA + export pipeline to
+    `job_dispatcher`.
 
-    NOTE on the "returns immediately" claim the original docstring
-    made: with `SyncJobDispatcherAdapter`, the whole pipeline actually
-    runs to completion inside `dispatch(...)` before this method
-    returns. So `execute()` re-fetches the `Document` afterwards to
-    report its *final* status/export result in the same response,
-    instead of the stale PENDING snapshot it built a few lines above
-    — there's no polling endpoint yet. Swap the dispatcher for a real
-    queue later and this re-fetch will simply reflect PENDING/
-    EXTRACTING again, which is still the correct behavior.
+    With `SyncJobDispatcherAdapter`, the whole pipeline runs to
+    completion inside `dispatch(...)` before this method returns, so
+    `execute()` re-fetches the `Document` afterwards to report its
+    final status/export result — there's no polling endpoint yet.
     """
 
     def __init__(
@@ -43,31 +39,22 @@ class CreateDocumentUseCase:
         if user is None:
             raise UserNotFoundError(f"User '{data.user_id}' does not exist.")
 
-        try:
-            source_type = SourceType(data.source_type)
-        except ValueError as exc:
-            raise UnsupportedSourceTypeError(
-                f"Source type '{data.source_type}' is not supported."
-            ) from exc
+        raw_sources = [Source.create_auto(raw) for raw in data.sources]
+        for source in raw_sources:
+            await self._sources.save(source)
 
-        source = Source.create(raw=data.source_raw, source_type=source_type)
         document = Document.create(
             user_id=data.user_id,
             title=data.title,
             document_type=data.document_type,
-            source=source,
+            raw_sources=raw_sources,
             presentation=data.presentation,
             export_target=data.export_target,
         )
-
-        await self._sources.save(source)
         await self._documents.save(document)
 
         await self._dispatcher.dispatch(document.id)
 
-        # `document` above is a stale, PENDING in-memory snapshot: the
-        # sync dispatcher ran the whole pipeline against its own copy
-        # fetched from the repository. Re-fetch to report reality.
         final_document = await self._documents.get_by_id(document.id) or document
         export_result = await self._documents.get_export_result(document.id)
 
@@ -78,10 +65,3 @@ class CreateDocumentUseCase:
             export_result=export_result,
             error_message=final_document.error_message,
         )
-
-        await self._sources.save(source)
-        await self._documents.save(document)
-
-        await self._dispatcher.dispatch(document.id)
-
-        return CreateDocumentOutput(document_id=document.id, status=document.status)

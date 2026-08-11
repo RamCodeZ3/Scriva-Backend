@@ -12,21 +12,12 @@ from domain.entities.source import SourceStatus
 
 class ProcessDocumentUseCase:
     """
-    Steps 2, 3 and 4 of the flow, run by the background job dispatched
-    from `CreateDocumentUseCase`:
-
-      2. Extract plain text from the source (Playwright / PyTube / file
-         reader / plain text), chosen through `ExtractorFactoryPort`.
-      3. Send that text to Gemini (`DocumentWriterPort`) and get back
-         the APA sections + references.
-      4. Resolve the exporter for `document.export_target` ("google" or
-         "pdf") through `DocumentExporterResolverPort` and store the
-         resulting `ExportResult`.
-
-    Every stage updates the `Document`'s status so `GetDocumentStatusUseCase`
-    can report progress, and any failure is captured through
-    `Document.fail(...)` / `Source.mark_failed(...)` instead of leaving
-    the aggregate in an inconsistent state.
+    Steps 2, 3 and 4 of the flow:
+      2. Extract plain text from every source in `document.raw_sources`,
+         each through its own extractor via `ExtractorFactoryPort`.
+      3. Concatenate them and send to Gemini for the APA draft.
+      4. Resolve the exporter for `document.export_target` and store
+         the resulting `ExportResult`.
     """
 
     def __init__(
@@ -48,26 +39,32 @@ class ProcessDocumentUseCase:
         if document is None:
             raise DocumentNotFoundError(f"Document '{document_id}' does not exist.")
 
-        source = await self._sources.get_by_id(document.source.id)
-        if source is None:
-            raise SourceNotFoundError(f"Source '{document.source.id}' does not exist.")
+        sources = []
+        for raw_source in document.raw_sources:
+            source = await self._sources.get_by_id(raw_source.id)
+            if source is None:
+                raise SourceNotFoundError(f"Source '{raw_source.id}' does not exist.")
+            sources.append(source)
 
         try:
-            # 2. Extraction
             document.start_extraction()
             await self._documents.save(document)
 
-            extractor = self._extractor_factory.get_extractor(source.source_type)
-            content = await extractor.extract(source.raw)
-            source.mark_extracted(content)
-            await self._sources.save(source)
+            for source in sources:
+                extractor = self._extractor_factory.get_extractor(source.source_type)
+                content = await extractor.extract(source.raw)
+                source.mark_extracted(content)
+                await self._sources.save(source)
 
-            # 3. AI drafting
+            combined_content = "\n\n".join(
+                f"[Fuente {i + 1}]\n{s.get_content()}" for i, s in enumerate(sources)
+            )
+
             document.start_generation()
             await self._documents.save(document)
 
             sections, references = await self._writer.write(
-                source_content=source.get_content(),
+                source_content=combined_content,
                 title=document.title,
                 document_type=document.document_type,
                 presentation=document.presentation,
@@ -75,7 +72,6 @@ class ProcessDocumentUseCase:
             document.complete(sections=sections, sources=references)
             await self._documents.save(document)
 
-            # 4. Export
             exporter = await self._exporter_resolver.resolve(
                 document.export_target, document.user_id
             )
@@ -83,9 +79,10 @@ class ProcessDocumentUseCase:
             await self._documents.save_export_result(document.id, export_result)
 
         except Exception as exc:
-            if source.status != SourceStatus.EXTRACTED:
-                source.mark_failed(str(exc))
-                await self._sources.save(source)
+            for source in sources:
+                if source.status != SourceStatus.EXTRACTED:
+                    source.mark_failed(str(exc))
+                    await self._sources.save(source)
             document.fail(str(exc))
             await self._documents.save(document)
             raise
