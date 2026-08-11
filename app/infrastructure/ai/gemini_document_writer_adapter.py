@@ -38,7 +38,7 @@ _SYSTEM_INSTRUCTION = (
 class GeminiDocumentWriterAdapter(DocumentWriterPort):
     """Adapter for `DocumentWriterPort` backed by the official `google-genai` SDK."""
 
-    def __init__(self, api_key: str, model_name: str = "gemini-2.5-pro") -> None:
+    def __init__(self, api_key: str, model_name: str = "gemini-3.5-flash") -> None:
         self._client = genai.Client(api_key=api_key)
         self._model_name = model_name
 

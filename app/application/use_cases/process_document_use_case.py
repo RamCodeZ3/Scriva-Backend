@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from application.exceptions import DocumentNotFoundError, SourceNotFoundError
-from application.ports.document_exporter_port import DocumentExporterPort
+from application.ports.document_exporter_resolver_port import DocumentExporterResolverPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
@@ -19,8 +19,9 @@ class ProcessDocumentUseCase:
          reader / plain text), chosen through `ExtractorFactoryPort`.
       3. Send that text to Gemini (`DocumentWriterPort`) and get back
          the APA sections + references.
-      4. Export the finished document with the Google Docs adapter
-         (`DocumentExporterPort`) and store the resulting link.
+      4. Resolve the exporter for `document.export_target` ("google" or
+         "pdf") through `DocumentExporterResolverPort` and store the
+         resulting `ExportResult`.
 
     Every stage updates the `Document`'s status so `GetDocumentStatusUseCase`
     can report progress, and any failure is captured through
@@ -34,13 +35,13 @@ class ProcessDocumentUseCase:
         source_repository: SourceRepositoryPort,
         extractor_factory: ExtractorFactoryPort,
         document_writer: DocumentWriterPort,
-        document_exporter: DocumentExporterPort,
+        exporter_resolver: DocumentExporterResolverPort,
     ) -> None:
         self._documents = document_repository
         self._sources = source_repository
         self._extractor_factory = extractor_factory
         self._writer = document_writer
-        self._exporter = document_exporter
+        self._exporter_resolver = exporter_resolver
 
     async def execute(self, document_id: UUID) -> None:
         document = await self._documents.get_by_id(document_id)
@@ -75,8 +76,11 @@ class ProcessDocumentUseCase:
             await self._documents.save(document)
 
             # 4. Export
-            export_url = await self._exporter.export(document)
-            await self._documents.save_export_url(document.id, export_url)
+            exporter = await self._exporter_resolver.resolve(
+                document.export_target, document.user_id
+            )
+            export_result = await exporter.export(document)
+            await self._documents.save_export_result(document.id, export_result)
 
         except Exception as exc:
             if source.status != SourceStatus.EXTRACTED:

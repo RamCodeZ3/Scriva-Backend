@@ -9,6 +9,8 @@ from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
 
+from application.dtos.export_result import ExportResult
+
 
 @dataclass(frozen=True)
 class CreateDocumentInput:
@@ -24,13 +26,21 @@ class CreateDocumentInput:
     source_raw: str          # URL, path, or plain text
     source_type: str         # "web" | "youtube" | "file" | "text"
     source_lang: str = "en"
+    export_target: str = "pdf"   # "google" | "pdf"
 
 
 @dataclass(frozen=True)
 class CreateDocumentOutput:
-    """Returned right away so the API can answer 202 Accepted."""
+    """
+    Returned once the (currently synchronous) pipeline finishes.
+    `export_result` is None only if the pipeline failed before
+    reaching the export step — check `status` / `error_message` then.
+    """
     document_id: UUID
     status: DocumentStatus
+    document_type: DocumentType
+    export_result: ExportResult | None = None
+    error_message: str | None = None
 
 
 @dataclass(frozen=True)

@@ -47,6 +47,13 @@ class Document:
     created_at: datetime
     updated_at: datetime
     error_message: str | None = None
+    # "google" | "pdf" — which DocumentExporterPort to resolve once the
+    # draft is DONE. Lives on the aggregate (rather than being passed
+    # around as a loose parameter) because it's part of what this
+    # specific document was requested to become, same spirit as
+    # `document_type`. Defaults to "pdf" since that path needs no
+    # external account.
+    export_target: str = "pdf"
 
     # ── Factory method ────────────────────────────────────────────────────────
 
@@ -57,7 +64,8 @@ class Document:
         title: str,
         document_type: DocumentType,
         source: Source,
-        presentation: PresentationInfo
+        presentation: PresentationInfo,
+        export_target: str = "pdf",
     ) -> Document:
         """Creates a new Document in PENDING status."""
         now = datetime.utcnow()
@@ -73,6 +81,7 @@ class Document:
             sources=[],
             created_at=now,
             updated_at=now,
+            export_target=export_target,
         )
 
     # ── State transitions ─────────────────────────────────────────────────────

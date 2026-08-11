@@ -15,6 +15,7 @@ from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
 
+from application.dtos.export_result import ExportResult
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.source_repository_port import SourceRepositoryPort
 
@@ -26,19 +27,25 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
       source_id uuid (fk -> sources.id), presentation jsonb,
       status text, sections jsonb, sources jsonb,
       created_at timestamptz, updated_at timestamptz,
-      error_message text nullable, export_url text nullable
+      error_message text nullable,
+      document_url text nullable,          -- ExportResult.url (Google Docs)
+      export_file_name text nullable,      -- ExportResult.file_name (PDF)
+      export_content_type text nullable,   -- ExportResult.content_type (PDF)
+      export_storage_path text nullable    -- ExportResult.storage_path (PDF, local disk)
 
-    NOTE: serialization assumes `PresentationInfo`, `APASection` and
-    `SourceReference` are plain dataclasses whose fields round-trip
-    through `dataclasses.asdict` / `Class(**data)`. If any of them
-    isn't a dataclass, or nests something non-JSON-serializable, adjust
-    `_to_row` / `_to_entity` accordingly.
-
-    Rebuilding a `Document` also requires its linked `Source`, so this
-    adapter depends on a `SourceRepositoryPort` to fetch it.
+    NOTE: `ExportResult.file_bytes` is intentionally NEVER persisted
+    here — PDFs stay on local disk only (`storage_path`); nothing
+    binary goes into Postgres for now. If that changes later, this is
+    the one place to add it (e.g. a Supabase Storage bucket column).
     """
 
     _TABLE = "documents"
+    _EXPORT_COLUMNS = (
+        "document_url",
+        "export_file_name",
+        "export_content_type",
+        "export_storage_path",
+    )
 
     def __init__(self, client: Client, source_repository: SourceRepositoryPort) -> None:
         self._client = client
@@ -57,14 +64,33 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
         rows = await asyncio.to_thread(self._list_rows_by_user_sync, str(user_id))
         return [await self._to_entity(row) for row in rows]
 
-    async def save_export_url(self, document_id: UUID, export_url: str) -> None:
+    async def save_export_result(self, document_id: UUID, export_result: ExportResult) -> None:
         await asyncio.to_thread(
-            self._update_field_sync, str(document_id), "export_url", export_url
+            self._update_fields_sync,
+            str(document_id),
+            {
+                "document_url": export_result.url,
+                "export_file_name": export_result.file_name,
+                "export_content_type": export_result.content_type,
+                "export_storage_path": export_result.storage_path,
+            },
         )
 
-    async def get_export_url(self, document_id: UUID) -> str | None:
+    async def get_export_result(self, document_id: UUID) -> ExportResult | None:
         row = await asyncio.to_thread(self._get_row_sync, str(document_id))
-        return row.get("export_url") if row else None
+        if row is None:
+            return None
+
+        if not any(row.get(col) for col in self._EXPORT_COLUMNS):
+            return None  # nothing exported (yet)
+
+        return ExportResult(
+            url=row.get("document_url"),
+            file_bytes=None,  # never persisted — see class docstring
+            file_name=row.get("export_file_name"),
+            content_type=row.get("export_content_type"),
+            storage_path=row.get("export_storage_path"),
+        )
 
     # ── sync helpers (run inside a thread) ──────────────────────────────
 
@@ -85,8 +111,8 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
         result = self._client.table(self._TABLE).select("*").eq("user_id", user_id).execute()
         return result.data or []
 
-    def _update_field_sync(self, document_id: str, field: str, value) -> None:
-        self._client.table(self._TABLE).update({field: value}).eq("id", document_id).execute()
+    def _update_fields_sync(self, document_id: str, fields: dict) -> None:
+        self._client.table(self._TABLE).update(fields).eq("id", document_id).execute()
 
     # ── mapping ──────────────────────────────────────────────────────────
 

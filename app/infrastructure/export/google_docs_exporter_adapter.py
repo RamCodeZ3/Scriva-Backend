@@ -9,6 +9,7 @@ from googleapiclient.errors import HttpError
 from domain.entities.document import Document
 from domain.exceptions import DocumentBuildError
 
+from application.dtos.export_result import ExportResult
 from application.ports.document_exporter_port import DocumentExporterPort
 
 
@@ -21,8 +22,9 @@ class GoogleDocsExporterAdapter(DocumentExporterPort):
     def __init__(self, user_access_token: str) -> None:
         self._credentials = Credentials(token=user_access_token)
 
-    async def export(self, document: Document) -> str:
-        return await asyncio.to_thread(self._export_sync, document)
+    async def export(self, document: Document) -> ExportResult:
+        url = await asyncio.to_thread(self._export_sync, document)
+        return ExportResult(url=url)
 
     def _export_sync(self, document: Document) -> str:
         docs_service = build("docs", "v1", credentials=self._credentials)

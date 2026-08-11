@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import base64
+
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from domain.entities.user import User
 from domain.value_objects.document_type import DocumentType
@@ -14,12 +16,6 @@ from api.schemas.documents import CreateDocumentRequest, CreateDocumentResponse
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
-# The request body doesn't carry a document_type, so every document
-# created through this endpoint uses the same default for now — add it
-# as a request field later if you need the caller to choose between
-# SUMMARY / SYNTHESIS / REPORT / BRIEF.
-_DEFAULT_DOCUMENT_TYPE = DocumentType.REPORT
-
 
 @router.post("/", response_model=CreateDocumentResponse)
 async def create_document(
@@ -29,11 +25,29 @@ async def create_document(
 ) -> CreateDocumentResponse:
     """
     Creates a document from a source and runs the full pipeline
-    (extraction -> Gemini draft -> Google Docs export) before
-    answering, since there's a single endpoint and no polling for now.
-    Expect this call to take as long as the slowest step (usually the
-    AI draft or a heavy web page).
+    (extraction -> Gemini draft -> export) before answering, since
+    there's a single endpoint and no polling for now. Expect this call
+    to take as long as the slowest step (usually the AI draft, a heavy
+    web page, or the Google Docs export).
+
+    `export_target` picks the destination:
+      - "pdf" (default): no external account needed. The account is
+        still identified the same way as every other call on this
+        service — the Supabase-signed Bearer token resolved by
+        `get_current_user` — there's no separate "Google-shaped"
+        identity for this path.
+      - "google": requires this account to already have linked Google
+        Docs/Drive (via the other backend's OAuth consent flow); the
+        response carries `document_url` instead of the inline file.
     """
+    try:
+        document_type = DocumentType(body.document_type)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid document_type '{body.document_type}': {exc}",
+        ) from exc
+
     subject = _infer_subject(body)
 
     presentation = PresentationInfo(
@@ -47,17 +61,28 @@ async def create_document(
     data = CreateDocumentInput(
         user_id=current_user.id,
         title=f"Documento generado - {subject}",
-        document_type=_DEFAULT_DOCUMENT_TYPE,
+        document_type=document_type,
         presentation=presentation,
         source_raw=body.source,
         source_type=body.source_type,
+        export_target=body.export_target,
     )
 
     result = await use_case.execute(data)
+    export = result.export_result
 
     return CreateDocumentResponse(
         status=result.status.value,
-        document_url=result.export_url,
+        document_type=result.document_type.value,
+        document_url=export.url if export else None,
+        file_base64=(
+            base64.b64encode(export.file_bytes).decode("ascii")
+            if export and export.file_bytes
+            else None
+        ),
+        file_name=export.file_name if export else None,
+        content_type=export.content_type if export else None,
+        error_message=result.error_message,
     )
 
 

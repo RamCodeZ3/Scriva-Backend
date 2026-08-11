@@ -11,14 +11,19 @@ from domain.entities.source import Source, SourceType
 
 class CreateDocumentUseCase:
     """
-    Step 1 of the flow: the web layer sends the source/media plus the
-    user info for the presentation page.
+    Registers the request (validates the user, creates the `Source`
+    and `Document` aggregates in PENDING status, persists them) and
+    hands the extraction + IA + export pipeline to `job_dispatcher`.
 
-    This use case only *registers* the request: validates the user,
-    creates the `Source` and `Document` aggregates in PENDING status,
-    persists them, and hands the heavy lifting (extraction + IA +
-    export) to a background job. It returns immediately so the API can
-    answer with a document id the client will poll.
+    NOTE on the "returns immediately" claim the original docstring
+    made: with `SyncJobDispatcherAdapter`, the whole pipeline actually
+    runs to completion inside `dispatch(...)` before this method
+    returns. So `execute()` re-fetches the `Document` afterwards to
+    report its *final* status/export result in the same response,
+    instead of the stale PENDING snapshot it built a few lines above
+    — there's no polling endpoint yet. Swap the dispatcher for a real
+    queue later and this re-fetch will simply reflect PENDING/
+    EXTRACTING again, which is still the correct behavior.
     """
 
     def __init__(
@@ -47,10 +52,31 @@ class CreateDocumentUseCase:
 
         source = Source.create(raw=data.source_raw, source_type=source_type)
         document = Document.create(
+            user_id=data.user_id,
             title=data.title,
             document_type=data.document_type,
             source=source,
             presentation=data.presentation,
+            export_target=data.export_target,
+        )
+
+        await self._sources.save(source)
+        await self._documents.save(document)
+
+        await self._dispatcher.dispatch(document.id)
+
+        # `document` above is a stale, PENDING in-memory snapshot: the
+        # sync dispatcher ran the whole pipeline against its own copy
+        # fetched from the repository. Re-fetch to report reality.
+        final_document = await self._documents.get_by_id(document.id) or document
+        export_result = await self._documents.get_export_result(document.id)
+
+        return CreateDocumentOutput(
+            document_id=final_document.id,
+            status=final_document.status,
+            document_type=final_document.document_type,
+            export_result=export_result,
+            error_message=final_document.error_message,
         )
 
         await self._sources.save(source)

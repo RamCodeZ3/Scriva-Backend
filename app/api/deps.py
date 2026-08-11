@@ -9,7 +9,9 @@ from fastapi import Depends, Header, HTTPException, status
 from domain.entities.source import SourceType
 from domain.entities.user import User
 
-from application.ports.document_exporter_port import DocumentExporterPort
+from dotenv import load_dotenv
+
+from application.ports.document_exporter_resolver_port import DocumentExporterResolverPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
@@ -22,7 +24,10 @@ from application.use_cases.process_document_use_case import ProcessDocumentUseCa
 from infrastructure.ai.gemini_document_writer_adapter import GeminiDocumentWriterAdapter
 from infrastructure.auth.google_oauth_token_provider import GoogleOAuthTokenProvider
 from infrastructure.auth.supabase_jwt_auth import InvalidTokenError, SupabaseJWTAuth
-from infrastructure.export.google_docs_exporter_adapter import GoogleDocsExporterAdapter
+from infrastructure.export.document_exporter_resolver_adapter import (
+    DocumentExporterResolverAdapter,
+)
+from infrastructure.export.pdf_document_exporter_adapter import PdfDocumentExporterAdapter
 from infrastructure.extractors.extractor_factory_adapter import ExtractorFactoryAdapter
 from infrastructure.extractors.file_extractor_adapter import FileExtractorAdapter
 from infrastructure.extractors.text_extractor_adapter import PlainTextExtractorAdapter
@@ -41,6 +46,7 @@ from infrastructure.persistence.supabase_user_repository import SupabaseUserRepo
 # ── Process-wide singletons ─────────────────────────────────────────────
 # Built once and reused across requests — anything with its own
 # connection pool / expensive init belongs here, not per-request.
+
 
 @lru_cache
 def get_supabase_client():
@@ -80,6 +86,7 @@ def get_document_writer() -> DocumentWriterPort:
 def get_google_credentials_repository() -> GoogleCredentialsPort:
     # Reads a table written by the *other* backend (Google OAuth
     # consent lives there). The encryption key must match theirs.
+    load_dotenv()
     return SupabaseGoogleCredentialsRepository(
         get_supabase_client(),
         encryption_key=os.environ["GOOGLE_TOKEN_ENCRYPTION_KEY"],
@@ -88,9 +95,35 @@ def get_google_credentials_repository() -> GoogleCredentialsPort:
 
 @lru_cache
 def get_google_oauth_token_provider() -> GoogleOAuthTokenProvider:
+    load_dotenv()
     return GoogleOAuthTokenProvider(
         client_id=os.environ["GOOGLE_OAUTH_CLIENT_ID"],
         client_secret=os.environ["GOOGLE_OAUTH_CLIENT_SECRET"],
+    )
+
+
+@lru_cache
+def get_pdf_document_exporter() -> PdfDocumentExporterAdapter:
+    # Where generated PDFs are kept server-side for quick inspection.
+    # Purely local/temporary storage as requested — point this at a
+    # persistent volume (or add a TTL cleanup job) before relying on
+    # it beyond "check the last few runs".
+    storage_dir = os.environ.get("PDF_STORAGE_DIR", "storage/documents")
+    return PdfDocumentExporterAdapter(storage_dir=storage_dir)
+
+
+@lru_cache
+def get_document_exporter_resolver() -> DocumentExporterResolverPort:
+    # NOTE: deliberately does NOT depend on `get_current_user` /
+    # `get_google_access_token` — resolving eagerly at DI-graph build
+    # time was exactly what forced every request through Google's
+    # OAuth check even when `export_target="pdf"`. Google credentials
+    # are now only looked up inside `resolve(...)`, and only when the
+    # request actually asks for `export_target="google"`.
+    return DocumentExporterResolverAdapter(
+        pdf_exporter=get_pdf_document_exporter(),
+        google_credentials_repository=get_google_credentials_repository(),
+        google_token_provider=get_google_oauth_token_provider(),
     )
 
 
@@ -155,6 +188,13 @@ async def get_current_user(
     Resolves the business `users` row for the authenticated account.
     Since this service doesn't manage user creation, a missing row
     means the account hasn't been provisioned yet by the other backend.
+
+    This is the ONLY identity check the document endpoints need now:
+    both the "pdf" and "google" export paths key off `current_user.id`
+    (the same id decrypted from the Bearer token above) — the Google
+    path additionally looks up that id's stored refresh_token lazily
+    inside `DocumentExporterResolverAdapter.resolve(...)`, it doesn't
+    require a *different* signed identity.
     """
     user = await user_repository.get_by_id(user_id)
     if user is None:
@@ -165,39 +205,6 @@ async def get_current_user(
     return user
 
 
-# ── Google Docs export (per-user OAuth, stored refresh_token) ───────────
-# The document is created directly in *the user's own* Google Drive.
-# The refresh_token was obtained during the OAuth consent handled by
-# the other backend and is only read here; we exchange it for a fresh
-# access_token on every call, nothing long-lived is cached in memory.
-
-async def get_google_access_token(
-    current_user: User = Depends(get_current_user),
-    credentials_repository: GoogleCredentialsPort = Depends(get_google_credentials_repository),
-    token_provider: GoogleOAuthTokenProvider = Depends(get_google_oauth_token_provider),
-) -> str:
-    refresh_token = await credentials_repository.get_refresh_token(current_user.id)
-    if refresh_token is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account hasn't granted Google Docs/Drive access yet.",
-        )
-
-    try:
-        return await token_provider.get_access_token(refresh_token)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Could not refresh Google credentials: {exc}",
-        ) from exc
-
-
-def get_document_exporter(
-    google_access_token: str = Depends(get_google_access_token),
-) -> DocumentExporterPort:
-    return GoogleDocsExporterAdapter(user_access_token=google_access_token)
-
-
 # ── Use cases ────────────────────────────────────────────────────────────
 
 def get_process_document_use_case(
@@ -205,14 +212,14 @@ def get_process_document_use_case(
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
     extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
     document_writer: DocumentWriterPort = Depends(get_document_writer),
-    document_exporter: DocumentExporterPort = Depends(get_document_exporter),
+    exporter_resolver: DocumentExporterResolverPort = Depends(get_document_exporter_resolver),
 ) -> ProcessDocumentUseCase:
     return ProcessDocumentUseCase(
         document_repository=document_repository,
         source_repository=source_repository,
         extractor_factory=extractor_factory,
         document_writer=document_writer,
-        document_exporter=document_exporter,
+        exporter_resolver=exporter_resolver,
     )
 
 

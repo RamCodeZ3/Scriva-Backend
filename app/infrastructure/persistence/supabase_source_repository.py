@@ -12,10 +12,9 @@ from application.ports.source_repository_port import SourceRepositoryPort
 
 class SupabaseSourceRepository(SourceRepositoryPort):
     """
-    Expects a `sources` table:
-      id uuid pk, source_type text, raw text, status text,
-      content text nullable, char_count int nullable,
-      error_message text nullable
+    Maps to the real `sources` table (after the migration):
+      id uuid pk, type text, raw text, status text, content text nullable,
+      char_count int nullable, error_message text nullable, created_at timestamptz
     """
 
     _TABLE = "sources"
@@ -48,7 +47,7 @@ class SupabaseSourceRepository(SourceRepositoryPort):
     def _to_row(source: Source) -> dict:
         return {
             "id": str(source.id),
-            "source_type": source.source_type.value,
+            "type": source.source_type.value,
             "raw": source.raw,
             "status": source.status.value,
             "content": source.content,
@@ -60,7 +59,7 @@ class SupabaseSourceRepository(SourceRepositoryPort):
     def _to_entity(row: dict) -> Source:
         return Source(
             id=UUID(row["id"]),
-            source_type=SourceType(row["source_type"]),
+            source_type=SourceType(row["type"]),
             raw=row["raw"],
             status=SourceStatus(row["status"]),
             content=row.get("content"),
