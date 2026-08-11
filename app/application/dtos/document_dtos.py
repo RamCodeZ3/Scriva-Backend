@@ -14,28 +14,16 @@ from application.dtos.export_result import ExportResult
 
 @dataclass(frozen=True)
 class CreateDocumentInput:
-    """
-    Input DTO for the request coming from the web layer:
-    the source/media to process plus the user info needed for the
-    presentation (cover) page.
-    """
     user_id: UUID
     title: str
     document_type: DocumentType
     presentation: PresentationInfo
-    source_raw: str          # URL, path, or plain text
-    source_type: str         # "web" | "youtube" | "file" | "text"
-    source_lang: str = "en"
+    sources: list[str]           # raw strings: URLs, paths, or plain text
     export_target: str = "pdf"   # "google" | "pdf"
 
 
 @dataclass(frozen=True)
 class CreateDocumentOutput:
-    """
-    Returned once the (currently synchronous) pipeline finishes.
-    `export_result` is None only if the pipeline failed before
-    reaching the export step — check `status` / `error_message` then.
-    """
     document_id: UUID
     status: DocumentStatus
     document_type: DocumentType
@@ -45,7 +33,6 @@ class CreateDocumentOutput:
 
 @dataclass(frozen=True)
 class DocumentStatusOutput:
-    """Lightweight DTO used for polling the processing state."""
     document_id: UUID
     status: DocumentStatus
     error_message: str | None = None
@@ -53,7 +40,6 @@ class DocumentStatusOutput:
 
 @dataclass(frozen=True)
 class DocumentDetailOutput:
-    """Full document once it's DONE, including the exported file link."""
     document_id: UUID
     title: str
     status: DocumentStatus

@@ -23,23 +23,6 @@ async def create_document(
     current_user: User = Depends(get_current_user),
     use_case: CreateDocumentUseCase = Depends(get_create_document_use_case),
 ) -> CreateDocumentResponse:
-    """
-    Creates a document from a source and runs the full pipeline
-    (extraction -> Gemini draft -> export) before answering, since
-    there's a single endpoint and no polling for now. Expect this call
-    to take as long as the slowest step (usually the AI draft, a heavy
-    web page, or the Google Docs export).
-
-    `export_target` picks the destination:
-      - "pdf" (default): no external account needed. The account is
-        still identified the same way as every other call on this
-        service — the Supabase-signed Bearer token resolved by
-        `get_current_user` — there's no separate "Google-shaped"
-        identity for this path.
-      - "google": requires this account to already have linked Google
-        Docs/Drive (via the other backend's OAuth consent flow); the
-        response carries `document_url` instead of the inline file.
-    """
     try:
         document_type = DocumentType(body.document_type)
     except ValueError as exc:
@@ -63,8 +46,7 @@ async def create_document(
         title=f"Documento generado - {subject}",
         document_type=document_type,
         presentation=presentation,
-        source_raw=body.source,
-        source_type=body.source_type,
+        sources=body.sources,
         export_target=body.export_target,
     )
 
@@ -87,9 +69,5 @@ async def create_document(
 
 
 def _infer_subject(body: CreateDocumentRequest) -> str:
-    # `PresentationInfo.subject` is required but nothing in the request
-    # specifies it — derive a provisional one from `source` until you
-    # decide whether it should come from the AI draft or become an
-    # explicit request field.
-    first_line = body.source.strip().splitlines()[0] if body.source.strip() else "documento"
-    return first_line[:80]
+    first = next((s.strip() for s in body.sources if s.strip()), "documento")
+    return first.splitlines()[0][:80]
