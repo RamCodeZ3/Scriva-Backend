@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from google import genai
 from google.genai import types
@@ -22,13 +23,44 @@ _SECTION_ORDER = [
     APASectionType.SOURCES,
 ]
 
+# The ONLY markup token the model is allowed to emit. It marks a subheading
+# (a new subtopic) inside a section's `content` string. The exporter looks
+# for lines that start with exactly this token to render a proper APA
+# level-2 heading and to feed the table of contents. Nothing else — no
+# "#", "##", "**", "*", "`", "-", numbered lists, etc. — is allowed, since
+# the PDF renderer treats `content` as plain prose, not Markdown, and any
+# stray Markdown syntax is rendered as literal characters in the document.
+_SUBHEADING_TOKEN = "## "
+
 _SYSTEM_INSTRUCTION = (
     "You are an academic writing assistant. You write complete, well "
     "structured documents strictly following APA 7 formatting rules, in "
-    "the same language as the source content. You always answer with a "
-    "single JSON object and nothing else — no markdown fences, no "
-    "commentary, no preamble."
+    "the same language as the source content.\n\n"
+    "CRITICAL OUTPUT RULES — violating these breaks the document renderer, "
+    "which treats every field as plain text, not Markdown or HTML:\n"
+    "1. Never use Markdown or HTML syntax anywhere: no '#', '##', '###', "
+    "no '**bold**', no '*italic*', no '`code`', no '- ' or '* ' bullet "
+    "lists, no numbered lists like '1. '. Write everything as normal "
+    "academic prose, in full sentences and paragraphs.\n"
+    "2. The ONLY exception: inside a section's 'content', when you start a "
+    f"new subtopic, put that subtopic's heading alone on its own line, "
+    f"prefixed with exactly '{_SUBHEADING_TOKEN}' (two hash characters and "
+    "one space) and nothing else on that line — no bold, no numbering, no "
+    "trailing punctuation. Use this sparingly, only for genuine subtopic "
+    "breaks, and only inside the 'body' section unless another section "
+    "truly needs it.\n"
+    "3. The document 'title' you generate must be a short, properly "
+    "capitalized academic title written in your own words, in the same "
+    "language as the source. It must NEVER be a URL, NEVER be copied "
+    "verbatim from the source text, and must be at most ~12 words.\n"
+    "4. Every section 'title' (e.g. for introduction, body, conclusion) "
+    "must likewise be a short heading in your own words, never a URL and "
+    "never verbatim source text.\n"
+    "You always answer with a single JSON object and nothing else — no "
+    "markdown fences, no commentary, no preamble."
 )
+
+_URL_PATTERN = re.compile(r"https?://", re.IGNORECASE)
 
 
 class GeminiDocumentWriterAdapter(DocumentWriterPort):
@@ -43,7 +75,19 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         title: str,
         document_type: DocumentType,
         presentation: PresentationInfo,
-    ) -> tuple[list[APASection], list[SourceReference]]:
+    ) -> tuple[str, list[APASection], list[SourceReference]]:
+        """
+        Returns (title, sections, references).
+
+        NOTE: this now returns a *generated* title as the first element,
+        instead of only ever echoing back the `title` argument. The old
+        behavior was a direct cause of titles that were literally a raw
+        source URL or a copy-pasted snippet of the source text — the model
+        never had a chance to produce something better because nothing
+        asked it to. Callers must persist this returned title onto
+        `Document`/cover-page data instead of the one they passed in, and
+        `DocumentWriterPort.write` needs its return type updated to match.
+        """
         prompt = self._build_prompt(
             source_content=source_content,
             title=title,
@@ -65,7 +109,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         except Exception as exc:
             raise DocumentBuildError(f"Gemini request failed: {exc}") from exc
 
-        return self._parse_response(raw_text)
+        return self._parse_response(raw_text, fallback_title=title)
 
     def _build_prompt(
         self,
@@ -77,8 +121,12 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
     ) -> str:
         section_names = ", ".join(s.value for s in _SECTION_ORDER)
         return f"""
-Write a "{document_type.value}" document titled "{title}", following APA 7
-rules, based exclusively on the source material below.
+Write a "{document_type.value}" document, following APA 7 rules, based
+exclusively on the source material below.
+
+Topic / working title given by the user (use this only as a hint about the
+subject — do NOT copy it verbatim, and especially never use it if it is a
+URL): "{title}"
 
 Required sections, in this exact order: {section_names}.
 
@@ -86,6 +134,7 @@ Presentation/cover page data: {presentation}
 
 Respond with a single JSON object shaped exactly like this:
 {{
+  "title": "A short, original academic title you write yourself",
   "sections": [
     {{"section_type": "presentation", "title": "...", "content": "..."}},
     {{"section_type": "index", "title": "...", "content": "..."}},
@@ -99,14 +148,18 @@ Respond with a single JSON object shaped exactly like this:
   ]
 }}
 
+Reminder: "content" is plain prose, never Markdown. The only allowed markup
+is a line starting with "{_SUBHEADING_TOKEN}" to introduce a subtopic
+heading, used sparingly inside "body".
+
 --- SOURCE MATERIAL START ---
 {source_content}
 --- SOURCE MATERIAL END ---
 """.strip()
 
     def _parse_response(
-        self, raw_text: str
-    ) -> tuple[list[APASection], list[SourceReference]]:
+        self, raw_text: str, *, fallback_title: str
+    ) -> tuple[str, list[APASection], list[SourceReference]]:
         text = raw_text.strip()
         if text.startswith("```"):
             text = text.strip("`")
@@ -119,6 +172,8 @@ Respond with a single JSON object shaped exactly like this:
         except json.JSONDecodeError as exc:
             raise DocumentBuildError(f"Gemini did not return valid JSON: {exc}") from exc
 
+        title = self._validate_title(data.get("title"), field="title")
+
         raw_sections = data.get("sections")
         if not raw_sections:
             raise DocumentBuildError("Gemini response has no 'sections'.")
@@ -127,7 +182,7 @@ Respond with a single JSON object shaped exactly like this:
             sections = [
                 APASection(
                     section_type=APASectionType(s["section_type"]),
-                    title=s["title"],
+                    title=self._validate_title(s["title"], field="section title"),
                     content=s["content"],
                 )
                 for s in raw_sections
@@ -150,4 +205,27 @@ Respond with a single JSON object shaped exactly like this:
                 f"Malformed reference in Gemini response: {exc}"
             ) from exc
 
-        return sections, references
+        return title, sections, references
+
+    def _validate_title(self, value: object, *, field: str) -> str:
+        """
+        Guards against the exact failure mode that caused raw-URL /
+        raw-source titles: if the model ever produces an empty title, or
+        one that is obviously a URL, or an implausibly long one (a sign it
+        copied source text), fail loudly instead of silently shipping a
+        broken cover page or heading. The previous version trusted
+        whatever string was passed in with no validation at all.
+        """
+        if not isinstance(value, str) or not value.strip():
+            raise DocumentBuildError(f"Gemini response has an empty {field}.")
+        candidate = value.strip()
+        if _URL_PATTERN.search(candidate):
+            raise DocumentBuildError(
+                f"Gemini returned a {field} that looks like a URL: {candidate!r}"
+            )
+        if len(candidate) > 200:
+            raise DocumentBuildError(
+                f"Gemini returned an implausibly long {field} "
+                f"({len(candidate)} chars) — looks like copied source text."
+            )
+        return candidate

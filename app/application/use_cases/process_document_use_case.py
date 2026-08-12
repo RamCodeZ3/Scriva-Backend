@@ -63,12 +63,14 @@ class ProcessDocumentUseCase:
             document.start_generation()
             await self._documents.save(document)
 
-            sections, references = await self._writer.write(
+            title, sections, references = await self._writer.write(
                 source_content=combined_content,
                 title=document.title,
                 document_type=document.document_type,
                 presentation=document.presentation,
             )
+            
+            document.title = title
             document.complete(sections=sections, sources=references)
             await self._documents.save(document)
 

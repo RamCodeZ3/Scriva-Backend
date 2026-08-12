@@ -10,7 +10,13 @@ from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
+from reportlab.platypus import (
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+)
+from reportlab.platypus.tableofcontents import TableOfContents
 
 from domain.entities.document import Document
 from domain.exceptions import DocumentBuildError
@@ -23,39 +29,28 @@ _PAGE_SIZE = letter
 _MARGIN = inch  # APA 7: 1 inch on every side
 _LEADING = 24   # 12pt font, double-spaced (2 x 12)
 
+# Must match the GeminiDocumentWriterAdapter's `_SUBHEADING_TOKEN`. A line
+# starting with this token inside a section's `content` marks an APA
+# level-2 subheading. This is the ONLY markup the AI is instructed to
+# produce; everything else below is defensive cleanup for anything that
+# slips through anyway (the model does not always follow instructions).
+_SUBHEADING_TOKEN = "## "
+
+# Defensive Markdown/HTML stripping. `content` is meant to be plain prose,
+# but LLMs habitually emit Markdown regardless of instructions, and
+# reportlab's Paragraph renders literal "###", "**", etc. as-is instead of
+# formatting them — that literal leakage was the actual visible bug.
+_MD_ATX_HEADING_RE = re.compile(r"^#{1,6}\s*")
+_MD_STRAY_HASHES_RE = re.compile(r"#{2,6}")
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MD_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)([^*]+?)(?<!\*)\*(?!\*)")
+_MD_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+_MD_BULLET_RE = re.compile(r"^[\-\*\u2022]\s+")
+_MD_NUMBERED_RE = re.compile(r"^\d+[.)]\s+")
+
 
 class PdfDocumentExporterAdapter(DocumentExporterPort):
-    """
-    Renders a finished `Document` as a standalone APA 7 PDF with
-    ReportLab, and keeps a copy on the server's local disk.
-
-    Used whenever `export_target != "google"` — no external account
-    needed. The bytes are also returned in `ExportResult.file_bytes`
-    so the API layer can hand the file back inline in the response
-    instead of forcing the client to fetch it from somewhere else;
-    `storage_path` is the on-disk copy kept for quick server-side
-    inspection (as requested — this is meant to be temporary, wire a
-    cleanup job or a TTL if these are expected to pile up).
-
-    Layout choices (APA 7, student paper):
-      - Title page: student name, institution, course/subject,
-        instructor and date come from `document.presentation`
-        (`PresentationInfo`) — the structured cover data — NOT from
-        the AI-drafted "presentation" section.
-      - The AI-drafted PRESENTATION section (Gemini is asked to write
-        one, and `Document.complete()` requires it) is rendered right
-        after the cover as its own page, since it's real authored
-        content distinct from the cover metadata. If you'd rather fold
-        it into the cover or drop it, that's a one-line change in
-        `_build_sync`.
-      - INDEX, then INTRODUCTION/BODY/CONCLUSION flow together, then
-        References on its own page — a hanging indent, sorted by
-        author, one entry per `SourceReference.to_apa_string()`.
-      - 12pt Times, double-spaced, 1" margins, page number top-right
-        on every page (APA 7 student papers don't require a running
-        head).
-    """
-
+    
     def __init__(self, storage_dir: str = "storage/documents") -> None:
         self._storage_dir = storage_dir
         os.makedirs(self._storage_dir, exist_ok=True)
@@ -83,7 +78,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
 
     def _build_sync(self, document: Document) -> bytes:
         buffer = BytesIO()
-        doc = SimpleDocTemplate(
+        doc = _TocAwareDocTemplate(
             buffer,
             pagesize=_PAGE_SIZE,
             leftMargin=_MARGIN,
@@ -96,9 +91,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         story: list = []
         story += self._build_cover_page(document)
         story.append(PageBreak())
-        story += self._build_ai_section(document, APASectionType.PRESENTATION)
-        story.append(PageBreak())
-        story += self._build_ai_section(document, APASectionType.INDEX)
+        story += self._build_index_page()
         story.append(PageBreak())
 
         for section_type in (
@@ -111,7 +104,10 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         story.append(PageBreak())
         story += self._build_references(document)
 
-        doc.build(story, onFirstPage=_draw_page_number, onLaterPages=_draw_page_number)
+        # multiBuild (instead of build) makes the pass needed to resolve
+        # real page numbers for the table of contents before the final
+        # render.
+        doc.multiBuild(story, onFirstPage=_draw_page_number, onLaterPages=_draw_page_number)
         return buffer.getvalue()
 
     def _build_cover_page(self, document: Document) -> list:
@@ -125,11 +121,30 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
 
         elements: list = [
             Spacer(1, 2.5 * inch),
-            Paragraph(document.title, styles["TitleCover"]),
+            Paragraph(_escape(document.title), styles["TitleCover"]),
             Spacer(1, 0.5 * inch),
         ]
-        elements += [Paragraph(line, styles["CoverLine"]) for line in lines]
+        elements += [Paragraph(_escape(line), styles["CoverLine"]) for line in lines]
         return elements
+
+    def _build_index_page(self) -> list:
+        toc = TableOfContents()
+        toc.dotsMinLevel = 0
+        toc.levelStyles = [
+            ParagraphStyle(
+                "TOCLevel1", fontName="Times-Roman", fontSize=12, leading=_LEADING,
+                leftIndent=0, firstLineIndent=0,
+            ),
+            ParagraphStyle(
+                "TOCLevel2", fontName="Times-Roman", fontSize=12, leading=_LEADING,
+                leftIndent=0.35 * inch, firstLineIndent=0,
+            ),
+        ]
+        return [
+            Paragraph("Índice", self._styles["IndexTitle"]),
+            Spacer(1, 0.2 * inch),
+            toc,
+        ]
 
     def _build_ai_section(self, document: Document, section_type: APASectionType) -> list:
         section = document.get_section(section_type)
@@ -139,18 +154,40 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
             # inside a background export step.
             return []
 
-        elements: list = [Paragraph(section.title, self._styles["Heading1"])]
-        for paragraph in _split_paragraphs(section.content):
-            elements.append(Paragraph(paragraph, self._styles["Body"]))
+        elements: list = [
+            Paragraph(_escape(_clean_markdown(section.title)), self._styles["Heading1"])
+        ]
+        for block_type, text in _parse_content_blocks(section.content):
+            style = self._styles["Heading2"] if block_type == "heading" else self._styles["Body"]
+            elements.append(Paragraph(_escape(text), style))
         return elements
 
     def _build_references(self, document: Document) -> list:
         elements: list = [Paragraph("References", self._styles["Heading1"])]
         for ref in sorted(document.sources, key=lambda r: (r.author or "").lower()):
-            elements.append(Paragraph(ref.to_apa_string(), self._styles["Reference"]))
+            elements.append(Paragraph(_escape(ref.to_apa_string()), self._styles["Reference"]))
         if not document.sources:
             elements.append(Paragraph("No sources were provided.", self._styles["Body"]))
         return elements
+
+
+class _TocAwareDocTemplate(SimpleDocTemplate):
+    """
+    A SimpleDocTemplate that feeds every level-1/level-2 heading it lays
+    out into the document's TableOfContents flowable, so the index shows
+    real page numbers instead of a hand-typed listing. Must be built with
+    `multiBuild`, not `build`, so headings can be collected on an earlier
+    pass before the table of contents itself is drawn.
+    """
+
+    def afterFlowable(self, flowable) -> None:
+        if not isinstance(flowable, Paragraph):
+            return
+        style_name = getattr(flowable.style, "name", "")
+        if style_name == "Heading1":
+            self.notify("TOCEntry", (0, flowable.getPlainText(), self.page))
+        elif style_name == "Heading2":
+            self.notify("TOCEntry", (1, flowable.getPlainText(), self.page))
 
 
 def _build_styles() -> dict[str, ParagraphStyle]:
@@ -163,9 +200,21 @@ def _build_styles() -> dict[str, ParagraphStyle]:
             "CoverLine", fontName="Times-Roman", fontSize=12, leading=_LEADING,
             alignment=TA_CENTER,
         ),
+        "IndexTitle": ParagraphStyle(
+            # Deliberately NOT named "Heading1"/"Heading2" so it is never
+            # picked up as a table-of-contents entry for itself.
+            "IndexTitle", fontName="Times-Bold", fontSize=12, leading=_LEADING,
+            alignment=TA_CENTER,
+        ),
+        # APA 7 level 1: centered, bold.
         "Heading1": ParagraphStyle(
             "Heading1", fontName="Times-Bold", fontSize=12, leading=_LEADING,
             alignment=TA_CENTER, spaceBefore=12, spaceAfter=12,
+        ),
+        # APA 7 level 2: left-aligned, bold.
+        "Heading2": ParagraphStyle(
+            "Heading2", fontName="Times-Bold", fontSize=12, leading=_LEADING,
+            alignment=TA_LEFT, spaceBefore=12, spaceAfter=6,
         ),
         "Body": ParagraphStyle(
             "Body", fontName="Times-Roman", fontSize=12, leading=_LEADING,
@@ -189,9 +238,50 @@ def _draw_page_number(canvas, doc) -> None:
     canvas.restoreState()
 
 
-def _split_paragraphs(content: str) -> list[str]:
-    parts = [p.strip() for p in content.split("\n\n")]
-    return [p for p in parts if p]
+def _parse_content_blocks(content: str) -> list[tuple[str, str]]:
+    
+    blocks: list[tuple[str, str]] = []
+    for chunk in content.split("\n\n"):
+        lines = [line.strip() for line in chunk.strip().splitlines() if line.strip()]
+        if not lines:
+            continue
+
+        paragraph_lines: list[str] = []
+        for line in lines:
+            if line.startswith(_SUBHEADING_TOKEN):
+                if paragraph_lines:
+                    blocks.append(("paragraph", " ".join(paragraph_lines)))
+                    paragraph_lines = []
+                heading_text = _clean_markdown(line[len(_SUBHEADING_TOKEN):])
+                if heading_text:
+                    blocks.append(("heading", heading_text))
+            else:
+               
+                cleaned = _clean_markdown(line)
+                if cleaned:
+                    paragraph_lines.append(cleaned)
+        if paragraph_lines:
+            blocks.append(("paragraph", " ".join(paragraph_lines)))
+
+    return blocks
+
+
+def _clean_markdown(text: str) -> str:
+    text = _MD_ATX_HEADING_RE.sub("", text)
+    text = _MD_BULLET_RE.sub("", text)
+    text = _MD_NUMBERED_RE.sub("", text)
+    text = _MD_BOLD_RE.sub(r"\1", text)
+    text = _MD_ITALIC_RE.sub(r"\1", text)
+    text = _MD_INLINE_CODE_RE.sub(r"\1", text)
+    text = _MD_STRAY_HASHES_RE.sub("", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def _escape(text: str) -> str:
+    """reportlab's Paragraph interprets a small XML/HTML subset, so any
+    literal '&', '<', '>' in AI-generated or reference text (e.g.
+    "Smith & Jones") must be escaped or it can break rendering."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _safe_filename(title: str) -> str:

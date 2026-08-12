@@ -43,7 +43,7 @@ async def create_document(
 
     data = CreateDocumentInput(
         user_id=current_user.id,
-        title=f"Documento generado - {subject}",
+        title=f"{subject}",
         document_type=document_type,
         presentation=presentation,
         sources=body.sources,
