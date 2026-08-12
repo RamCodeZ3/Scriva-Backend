@@ -31,19 +31,17 @@ async def create_document(
             detail=f"Invalid document_type '{body.document_type}': {exc}",
         ) from exc
 
-    subject = _infer_subject(body)
-
     presentation = PresentationInfo(
         student_name=body.user,
         professor=body.professor,
-        subject=subject,
+        subject=body.subject,
         student_id=body.student_id,
         institution=body.institution,
     )
 
     data = CreateDocumentInput(
         user_id=current_user.id,
-        title=f"{subject}",
+        title=_title_snippet(body),
         document_type=document_type,
         presentation=presentation,
         sources=body.sources,
@@ -68,6 +66,8 @@ async def create_document(
     )
 
 
-def _infer_subject(body: CreateDocumentRequest) -> str:
+def _title_snippet(body: CreateDocumentRequest) -> str:
+    if body.subject:
+        return body.subject[:80]
     first = next((s.strip() for s in body.sources if s.strip()), "documento")
     return first.splitlines()[0][:80]

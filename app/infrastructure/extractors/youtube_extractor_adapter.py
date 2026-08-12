@@ -3,64 +3,44 @@ from __future__ import annotations
 import asyncio
 import re
 
-from pytube import YouTube
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api._errors import (
+    NoTranscriptFound,
+    TranscriptsDisabled,
+    VideoUnavailable,
+)
 
 from domain.exceptions import InvalidSourceError
 
 from application.ports.source_extractor_port import SourceExtractorPort
 
+_ID_RE = re.compile(
+    r"(?:youtu\.be/|youtube\.com/(?:watch\?v=|shorts/|embed/|live/))([A-Za-z0-9_-]{11})"
+)
+
 
 class YoutubeExtractorAdapter(SourceExtractorPort):
-    """
-    Extracts metadata (title, author) and the transcript/captions of a
-    YouTube video via PyTube.
-
-    NOTE: PyTube's caption support depends on the video actually having
-    captions (manual or auto-generated) available for one of the
-    preferred languages. If YouTube changes its internal APIs and PyTube
-    breaks, `youtube-transcript-api` is a solid drop-in replacement for
-    just the transcript part.
-    """
-
     def __init__(self, preferred_langs: list[str] | None = None) -> None:
-        self._preferred_langs = preferred_langs or ["en", "a.en", "es", "a.es"]
+        self._preferred_langs = preferred_langs or ["es", "en"]
 
     async def extract(self, raw: str) -> str:
+        video_id = self._extract_video_id(raw)
         try:
-            yt = await asyncio.to_thread(YouTube, raw)
-            caption = self._pick_caption(yt)
-            if caption is None:
-                raise InvalidSourceError(f"No captions available for video '{raw}'.")
-            srt = await asyncio.to_thread(caption.generate_srt_captions)
-        except InvalidSourceError:
-            raise
+            transcript = await asyncio.to_thread(
+                YouTubeTranscriptApi().fetch, video_id, languages=self._preferred_langs
+            )
+        except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable) as exc:
+            raise InvalidSourceError(f"No transcript available for '{raw}': {exc}") from exc
         except Exception as exc:
-            raise InvalidSourceError(
-                f"Could not extract transcript from '{raw}': {exc}"
-            ) from exc
+            raise InvalidSourceError(f"Could not extract transcript from '{raw}': {exc}") from exc
 
-        transcript = _strip_srt(srt)
-        if not transcript:
+        text = " ".join(snippet.text for snippet in transcript)
+        if not text.strip():
             raise InvalidSourceError(f"Transcript for '{raw}' is empty.")
+        return text
 
-        header = f"Title: {yt.title}\nAuthor: {yt.author}\n\n"
-        return header + transcript
-
-    def _pick_caption(self, yt: YouTube):
-        for lang in self._preferred_langs:
-            caption = yt.captions.get(lang)
-            if caption is not None:
-                return caption
-        return next(iter(yt.captions.values()), None)
-
-
-def _strip_srt(srt: str) -> str:
-    """Removes sequence numbers and timestamps, keeping only spoken text."""
-    text_lines = []
-    for line in srt.splitlines():
-        line = line.strip()
-        if not line or line.isdigit() or "-->" in line:
-            continue
-        text_lines.append(line)
-    text = " ".join(text_lines)
-    return re.sub(r"\s+", " ", text).strip()
+    def _extract_video_id(self, raw: str) -> str:
+        match = _ID_RE.search(raw)
+        if not match:
+            raise InvalidSourceError(f"Could not parse a YouTube video id from '{raw}'.")
+        return match.group(1)

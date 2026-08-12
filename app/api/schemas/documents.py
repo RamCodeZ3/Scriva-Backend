@@ -9,6 +9,7 @@ class CreateDocumentRequest(BaseModel):
     professor: str = Field(..., min_length=1)
     student_id: str = Field(..., min_length=1)
     institution: str = Field(..., min_length=1)
+    subject: str | None = None
 
 
 class CreateDocumentResponse(BaseModel):
