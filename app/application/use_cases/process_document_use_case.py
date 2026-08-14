@@ -1,7 +1,6 @@
 from uuid import UUID
 
 from application.exceptions import DocumentNotFoundError, SourceNotFoundError
-from application.ports.document_exporter_resolver_port import DocumentExporterResolverPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
@@ -12,12 +11,9 @@ from domain.entities.source import SourceStatus
 
 class ProcessDocumentUseCase:
     """
-    Steps 2, 3 and 4 of the flow:
-      2. Extract plain text from every source in `document.raw_sources`,
-         each through its own extractor via `ExtractorFactoryPort`.
-      3. Concatenate them and send to Gemini for the APA draft.
-      4. Resolve the exporter for `document.export_target` and store
-         the resulting `ExportResult`.
+    Extracts every source and sends the combined text to Gemini for the
+    APA draft. Export is decoupled from this flow — it becomes its own
+    step/endpoint once that's built.
     """
 
     def __init__(
@@ -26,13 +22,11 @@ class ProcessDocumentUseCase:
         source_repository: SourceRepositoryPort,
         extractor_factory: ExtractorFactoryPort,
         document_writer: DocumentWriterPort,
-        exporter_resolver: DocumentExporterResolverPort,
     ) -> None:
         self._documents = document_repository
         self._sources = source_repository
         self._extractor_factory = extractor_factory
         self._writer = document_writer
-        self._exporter_resolver = exporter_resolver
 
     async def execute(self, document_id: UUID) -> None:
         document = await self._documents.get_by_id(document_id)
@@ -68,17 +62,10 @@ class ProcessDocumentUseCase:
                 title=document.title,
                 document_type=document.document_type,
                 presentation=document.presentation,
+                additional_notes=document.additional_notes,
             )
-            
-            document.title = title
-            document.complete(sections=sections, sources=references)
+            document.complete(title=title, sections=sections, sources=references)
             await self._documents.save(document)
-
-            exporter = await self._exporter_resolver.resolve(
-                document.export_target, document.user_id
-            )
-            export_result = await exporter.export(document)
-            await self._documents.save_export_result(document.id, export_result)
 
         except Exception as exc:
             for source in sources:

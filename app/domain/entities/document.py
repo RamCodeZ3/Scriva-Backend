@@ -41,7 +41,7 @@ class Document:
     created_at: datetime
     updated_at: datetime
     error_message: str | None = None
-    export_target: str = "pdf"
+    additional_notes: str | None = None
 
     @classmethod
     def create(
@@ -51,7 +51,7 @@ class Document:
         document_type: DocumentType,
         raw_sources: list[Source],
         presentation: PresentationInfo,
-        export_target: str = "pdf",
+        additional_notes: str | None = None,
     ) -> Document:
         if not raw_sources:
             raise DocumentBuildError("A document needs at least one source.")
@@ -69,7 +69,7 @@ class Document:
             sources=[],
             created_at=now,
             updated_at=now,
-            export_target=export_target,
+            additional_notes=additional_notes,
         )
 
     def start_extraction(self) -> None:
@@ -82,7 +82,9 @@ class Document:
         self.status = DocumentStatus.GENERATING
         self._touch()
 
-    def complete(self, sections: list[APASection], sources: list[SourceReference]) -> None:
+    def complete(
+        self, title: str, sections: list[APASection], sources: list[SourceReference]
+    ) -> None:
         self._assert_status(DocumentStatus.GENERATING)
 
         if not sections:
@@ -101,6 +103,7 @@ class Document:
             names = ", ".join(m.value for m in missing)
             raise DocumentBuildError(f"Missing required APA sections: {names}")
 
+        self.title = title
         self.sections = sorted(sections, key=lambda s: s.section_type.order)
         self.sources = sources
         self.status = DocumentStatus.DONE

@@ -23,13 +23,6 @@ _SECTION_ORDER = [
     APASectionType.SOURCES,
 ]
 
-# The ONLY markup token the model is allowed to emit. It marks a subheading
-# (a new subtopic) inside a section's `content` string. The exporter looks
-# for lines that start with exactly this token to render a proper APA
-# level-2 heading and to feed the table of contents. Nothing else — no
-# "#", "##", "**", "*", "`", "-", numbered lists, etc. — is allowed, since
-# the PDF renderer treats `content` as plain prose, not Markdown, and any
-# stray Markdown syntax is rendered as literal characters in the document.
 _SUBHEADING_TOKEN = "## "
 
 _SYSTEM_INSTRUCTION = (
@@ -56,6 +49,10 @@ _SYSTEM_INSTRUCTION = (
     "4. Every section 'title' (e.g. for introduction, body, conclusion) "
     "must likewise be a short heading in your own words, never a URL and "
     "never verbatim source text.\n"
+    "5. If the user's additional notes contain a questionnaire (a list of "
+    "questions to answer), address every question explicitly and "
+    "completely inside the 'body' section, in prose, while still "
+    "producing all six required sections normally.\n"
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
 )
@@ -75,24 +72,14 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         title: str,
         document_type: DocumentType,
         presentation: PresentationInfo,
+        additional_notes: str | None = None,
     ) -> tuple[str, list[APASection], list[SourceReference]]:
-        """
-        Returns (title, sections, references).
-
-        NOTE: this now returns a *generated* title as the first element,
-        instead of only ever echoing back the `title` argument. The old
-        behavior was a direct cause of titles that were literally a raw
-        source URL or a copy-pasted snippet of the source text — the model
-        never had a chance to produce something better because nothing
-        asked it to. Callers must persist this returned title onto
-        `Document`/cover-page data instead of the one they passed in, and
-        `DocumentWriterPort.write` needs its return type updated to match.
-        """
         prompt = self._build_prompt(
             source_content=source_content,
             title=title,
             document_type=document_type,
             presentation=presentation,
+            additional_notes=additional_notes,
         )
 
         try:
@@ -118,8 +105,10 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         title: str,
         document_type: DocumentType,
         presentation: PresentationInfo,
+        additional_notes: str | None,
     ) -> str:
         section_names = ", ".join(s.value for s in _SECTION_ORDER)
+        notes = additional_notes.strip() if additional_notes and additional_notes.strip() else "None"
         return f"""
 Write a "{document_type.value}" document, following APA 7 rules, based
 exclusively on the source material below.
@@ -127,6 +116,9 @@ exclusively on the source material below.
 Topic / working title given by the user (use this only as a hint about the
 subject — do NOT copy it verbatim, and especially never use it if it is a
 URL): "{title}"
+
+Additional notes from the user (extraction guidance, tone, focus, or a
+questionnaire to answer inside "body" — see rule 5): {notes}
 
 Required sections, in this exact order: {section_names}.
 
@@ -208,14 +200,6 @@ heading, used sparingly inside "body".
         return title, sections, references
 
     def _validate_title(self, value: object, *, field: str) -> str:
-        """
-        Guards against the exact failure mode that caused raw-URL /
-        raw-source titles: if the model ever produces an empty title, or
-        one that is obviously a URL, or an implausibly long one (a sign it
-        copied source text), fail loudly instead of silently shipping a
-        broken cover page or heading. The previous version trusted
-        whatever string was passed in with no validation at all.
-        """
         if not isinstance(value, str) or not value.strip():
             raise DocumentBuildError(f"Gemini response has an empty {field}.")
         candidate = value.strip()

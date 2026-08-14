@@ -22,12 +22,6 @@ from application.ports.source_repository_port import SourceRepositoryPort
 
 class SupabaseDocumentRepository(DocumentRepositoryPort):
     _TABLE = "documents"
-    _EXPORT_COLUMNS = (
-        "document_url",
-        "export_file_name",
-        "export_content_type",
-        "export_storage_path",
-    )
 
     def __init__(self, client: Client, source_repository: SourceRepositoryPort) -> None:
         self._client = client
@@ -48,29 +42,14 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
 
     async def save_export_result(self, document_id: UUID, export_result: ExportResult) -> None:
         await asyncio.to_thread(
-            self._update_fields_sync,
-            str(document_id),
-            {
-                "document_url": export_result.url,
-                "export_file_name": export_result.file_name,
-                "export_content_type": export_result.content_type,
-                "export_storage_path": export_result.storage_path,
-            },
+            self._update_fields_sync, str(document_id), {"document_url": export_result.url}
         )
 
     async def get_export_result(self, document_id: UUID) -> ExportResult | None:
         row = await asyncio.to_thread(self._get_row_sync, str(document_id))
-        if row is None:
+        if row is None or not row.get("document_url"):
             return None
-        if not any(row.get(col) for col in self._EXPORT_COLUMNS):
-            return None
-        return ExportResult(
-            url=row.get("document_url"),
-            file_bytes=None,
-            file_name=row.get("export_file_name"),
-            content_type=row.get("export_content_type"),
-            storage_path=row.get("export_storage_path"),
-        )
+        return ExportResult(url=row["document_url"])
 
     def _save_sync(self, document: Document) -> None:
         self._client.table(self._TABLE).upsert(self._to_row(document)).execute()
@@ -106,7 +85,7 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             "created_at": document.created_at.isoformat(),
             "updated_at": document.updated_at.isoformat(),
             "error_message": document.error_message,
-            "export_target": document.export_target,
+            "additional_notes": document.additional_notes,
         }
 
     async def _to_entity(self, row: dict) -> Document:
@@ -130,7 +109,7 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             error_message=row.get("error_message"),
-            export_target=row.get("export_target", "pdf"),
+            additional_notes=row.get("additional_notes"),
         )
 
 

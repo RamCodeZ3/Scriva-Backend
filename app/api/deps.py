@@ -44,9 +44,6 @@ from infrastructure.persistence.supabase_user_repository import SupabaseUserRepo
 
 
 # ── Process-wide singletons ─────────────────────────────────────────────
-# Built once and reused across requests — anything with its own
-# connection pool / expensive init belongs here, not per-request.
-
 
 @lru_cache
 def get_supabase_client():
@@ -84,8 +81,6 @@ def get_document_writer() -> DocumentWriterPort:
 
 @lru_cache
 def get_google_credentials_repository() -> GoogleCredentialsPort:
-    # Reads a table written by the *other* backend (Google OAuth
-    # consent lives there). The encryption key must match theirs.
     load_dotenv()
     return SupabaseGoogleCredentialsRepository(
         get_supabase_client(),
@@ -104,22 +99,16 @@ def get_google_oauth_token_provider() -> GoogleOAuthTokenProvider:
 
 @lru_cache
 def get_pdf_document_exporter() -> PdfDocumentExporterAdapter:
-    # Where generated PDFs are kept server-side for quick inspection.
-    # Purely local/temporary storage as requested — point this at a
-    # persistent volume (or add a TTL cleanup job) before relying on
-    # it beyond "check the last few runs".
+    # Not wired into document creation anymore — kept for the future,
+    # standalone export endpoint.
     storage_dir = os.environ.get("PDF_STORAGE_DIR", "storage/documents")
     return PdfDocumentExporterAdapter(storage_dir=storage_dir)
 
 
 @lru_cache
 def get_document_exporter_resolver() -> DocumentExporterResolverPort:
-    # NOTE: deliberately does NOT depend on `get_current_user` /
-    # `get_google_access_token` — resolving eagerly at DI-graph build
-    # time was exactly what forced every request through Google's
-    # OAuth check even when `export_target="pdf"`. Google credentials
-    # are now only looked up inside `resolve(...)`, and only when the
-    # request actually asks for `export_target="google"`.
+    # Not wired into document creation anymore — kept for the future,
+    # standalone export endpoint.
     return DocumentExporterResolverAdapter(
         pdf_exporter=get_pdf_document_exporter(),
         google_credentials_repository=get_google_credentials_repository(),
@@ -144,9 +133,6 @@ def get_document_repository(
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────
-# Supabase Auth's user id and this service's business `users.id` are
-# the same value now, so the JWT's `sub` claim IS the user id directly
-# — no auth_id -> id lookup, no extra table.
 
 async def get_current_user_id(
     authorization: str = Header(..., alias="Authorization"),
@@ -184,18 +170,6 @@ async def get_current_user(
     user_id: UUID = Depends(get_current_user_id),
     user_repository: UserRepositoryPort = Depends(get_user_repository),
 ) -> User:
-    """
-    Resolves the business `users` row for the authenticated account.
-    Since this service doesn't manage user creation, a missing row
-    means the account hasn't been provisioned yet by the other backend.
-
-    This is the ONLY identity check the document endpoints need now:
-    both the "pdf" and "google" export paths key off `current_user.id`
-    (the same id decrypted from the Bearer token above) — the Google
-    path additionally looks up that id's stored refresh_token lazily
-    inside `DocumentExporterResolverAdapter.resolve(...)`, it doesn't
-    require a *different* signed identity.
-    """
     user = await user_repository.get_by_id(user_id)
     if user is None:
         raise HTTPException(
@@ -212,14 +186,12 @@ def get_process_document_use_case(
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
     extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
     document_writer: DocumentWriterPort = Depends(get_document_writer),
-    exporter_resolver: DocumentExporterResolverPort = Depends(get_document_exporter_resolver),
 ) -> ProcessDocumentUseCase:
     return ProcessDocumentUseCase(
         document_repository=document_repository,
         source_repository=source_repository,
         extractor_factory=extractor_factory,
         document_writer=document_writer,
-        exporter_resolver=exporter_resolver,
     )
 
 
@@ -229,8 +201,6 @@ def get_create_document_use_case(
     user_repository: UserRepositoryPort = Depends(get_user_repository),
     process_use_case: ProcessDocumentUseCase = Depends(get_process_document_use_case),
 ) -> CreateDocumentUseCase:
-    # Sync dispatcher: the whole pipeline runs before this endpoint
-    # answers. See SyncJobDispatcherAdapter's docstring for the tradeoffs.
     dispatcher = SyncJobDispatcherAdapter(process_use_case)
     return CreateDocumentUseCase(
         document_repository=document_repository,

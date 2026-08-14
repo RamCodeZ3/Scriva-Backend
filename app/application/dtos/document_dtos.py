@@ -9,8 +9,6 @@ from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
 
-from application.dtos.export_result import ExportResult
-
 
 @dataclass(frozen=True)
 class CreateDocumentInput:
@@ -18,8 +16,8 @@ class CreateDocumentInput:
     title: str
     document_type: DocumentType
     presentation: PresentationInfo
-    sources: list[str]           # raw strings: URLs, paths, or plain text
-    export_target: str = "pdf"   # "google" | "pdf"
+    sources: list[str]
+    additional_notes: str | None = None
 
 
 @dataclass(frozen=True)
@@ -27,7 +25,8 @@ class CreateDocumentOutput:
     document_id: UUID
     status: DocumentStatus
     document_type: DocumentType
-    export_result: ExportResult | None = None
+    document_title: str
+    sections: list[APASection]
     error_message: str | None = None
 
 
