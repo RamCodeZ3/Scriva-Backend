@@ -109,6 +109,38 @@ class Document:
         self.status = DocumentStatus.DONE
         self._touch()
 
+    def update_content(
+        self,
+        title: str | None = None,
+        sections: list[APASection] | None = None,
+        presentation: PresentationInfo | None = None,
+    ) -> None:
+        if title is not None:
+            self.title = title
+        if sections is not None:
+            self.sections = sorted(sections, key=lambda s: s.section_type.order)
+        if presentation is not None:
+            self.presentation = presentation
+        self._touch()
+
+    def augment(
+        self,
+        title: str,
+        sections: list[APASection],
+        sources: list[SourceReference],
+        new_raw_sources: list[Source],
+    ) -> None:
+        if self.status != DocumentStatus.DONE:
+            raise DocumentBuildError(
+                f"Cannot add info to a document in '{self.status.value}' status; "
+                "it must be 'done'."
+            )
+        self.title = title
+        self.sections = sorted(sections, key=lambda s: s.section_type.order)
+        self.sources = sources
+        self.raw_sources = self.raw_sources + new_raw_sources
+        self._touch()
+
     def fail(self, reason: str) -> None:
         self.status = DocumentStatus.FAILED
         self.error_message = reason

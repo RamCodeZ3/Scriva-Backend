@@ -3,20 +3,24 @@ class ApplicationError(Exception):
 
 
 class DocumentNotFoundError(ApplicationError):
-    """Raised when a Document id does not exist in the repository."""
+    pass
 
 
 class SourceNotFoundError(ApplicationError):
-    """Raised when a Source id does not exist in the repository."""
+    pass
 
 
 class UserNotFoundError(ApplicationError):
-    """Raised when a User id/email does not exist in the repository."""
+    pass
 
 
 class UserAlreadyExistsError(ApplicationError):
-    """Raised when trying to register a user with an email already in use."""
+    pass
 
 
 class UnsupportedSourceTypeError(ApplicationError):
-    """Raised when the requested source_type has no registered extractor."""
+    pass
+
+
+class DocumentAccessDeniedError(ApplicationError):
+    """Raised when a document is requested/modified by a user who doesn't own it."""

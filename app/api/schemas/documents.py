@@ -25,3 +25,53 @@ class CreateDocumentResponse(BaseModel):
     document_title: str
     document_sections: list[DocumentSectionOut]
     error_message: str | None = None
+
+
+class PresentationOut(BaseModel):
+    student_name: str
+    professor: str
+    subject: str | None = None
+    student_id: str | None = None
+    institution: str | None = None
+
+
+class DocumentGetResponse(BaseModel):
+    id: str
+    title: str
+    document_type: str
+    status: str
+    sections: list[DocumentSectionOut]
+    user_id: str
+    presentation: PresentationOut
+    error_message: str | None = None
+    source_ids: list[str]
+    created_at: str
+    updated_at: str
+
+
+class UpdateDocumentRequest(BaseModel):
+    title: str | None = None
+    sections: list[DocumentSectionOut] | None = None
+    presentation: PresentationOut | None = None
+
+
+class DocumentPatchResponse(BaseModel):
+    id: str
+    title: str
+    document_type: str
+    sections: list[DocumentSectionOut]
+    user_id: str
+    presentation: PresentationOut
+    error_message: str | None = None
+    source_ids: list[str]
+    updated_at: str
+
+
+class DeleteDocumentResponse(BaseModel):
+    status: str
+    document_id: str
+
+
+class AugmentDocumentRequest(BaseModel):
+    sources: list[str] = Field(..., min_length=1)
+    additional_notes: str | None = None
