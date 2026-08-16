@@ -19,7 +19,10 @@ from application.ports.google_credentials_port import GoogleCredentialsPort
 from application.ports.source_repository_port import SourceRepositoryPort
 from application.ports.user_repository_port import UserRepositoryPort
 from application.use_cases.create_document_use_case import CreateDocumentUseCase
+from application.use_cases.delete_document_use_case import DeleteDocumentUseCase
+from application.use_cases.get_document_use_case import GetDocumentUseCase
 from application.use_cases.process_document_use_case import ProcessDocumentUseCase
+from application.use_cases.update_document_use_case import UpdateDocumentUseCase
 
 from infrastructure.ai.gemini_document_writer_adapter import GeminiDocumentWriterAdapter
 from infrastructure.auth.google_oauth_token_provider import GoogleOAuthTokenProvider
@@ -208,3 +211,21 @@ def get_create_document_use_case(
         user_repository=user_repository,
         job_dispatcher=dispatcher,
     )
+
+
+def get_get_document_use_case(
+    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
+) -> GetDocumentUseCase:
+    return GetDocumentUseCase(document_repository)
+
+
+def get_update_document_use_case(
+    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
+) -> UpdateDocumentUseCase:
+    return UpdateDocumentUseCase(document_repository)
+
+
+def get_delete_document_use_case(
+    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
+) -> DeleteDocumentUseCase:
+    return DeleteDocumentUseCase(document_repository)

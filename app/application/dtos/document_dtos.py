@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from domain.entities.document import DocumentStatus
@@ -28,6 +29,30 @@ class CreateDocumentOutput:
     document_title: str
     sections: list[APASection]
     error_message: str | None = None
+
+
+@dataclass(frozen=True)
+class DocumentOutput:
+    id: UUID
+    title: str
+    document_type: DocumentType
+    status: DocumentStatus
+    sections: list[APASection]
+    user_id: UUID
+    presentation: PresentationInfo
+    error_message: str | None
+    source_ids: list[UUID]
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class UpdateDocumentInput:
+    document_id: UUID
+    user_id: UUID
+    title: str | None = None
+    sections: list[APASection] | None = None
+    presentation: PresentationInfo | None = None
 
 
 @dataclass(frozen=True)

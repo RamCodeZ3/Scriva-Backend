@@ -40,6 +40,9 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
         rows = await asyncio.to_thread(self._list_rows_by_user_sync, str(user_id))
         return [await self._to_entity(row) for row in rows]
 
+    async def delete(self, document_id: UUID) -> None:
+        await asyncio.to_thread(self._delete_sync, str(document_id))
+
     async def save_export_result(self, document_id: UUID, export_result: ExportResult) -> None:
         await asyncio.to_thread(
             self._update_fields_sync, str(document_id), {"document_url": export_result.url}
@@ -67,6 +70,9 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
     def _list_rows_by_user_sync(self, user_id: str) -> list[dict]:
         result = self._client.table(self._TABLE).select("*").eq("user_id", user_id).execute()
         return result.data or []
+
+    def _delete_sync(self, document_id: str) -> None:
+        self._client.table(self._TABLE).delete().eq("id", document_id).execute()
 
     def _update_fields_sync(self, document_id: str, fields: dict) -> None:
         self._client.table(self._TABLE).update(fields).eq("id", document_id).execute()

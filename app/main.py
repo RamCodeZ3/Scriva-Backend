@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from application.exceptions import (
     ApplicationError,
+    DocumentAccessDeniedError,
     DocumentNotFoundError,
     SourceNotFoundError,
     UnsupportedSourceTypeError,
@@ -20,11 +21,6 @@ app = FastAPI(title="APA Document Generator API")
 
 app.include_router(documents_router)
 
-
-# ── Error handling ───────────────────────────────────────────────────────
-# Starlette resolves handlers by walking the exception's MRO, so the
-# most specific registered class always wins over the generic
-# ApplicationError fallback below — registration order doesn't matter.
 
 @app.exception_handler(UserNotFoundError)
 async def user_not_found_handler(request: Request, exc: UserNotFoundError) -> JSONResponse:
@@ -41,6 +37,13 @@ async def document_not_found_handler(
 @app.exception_handler(SourceNotFoundError)
 async def source_not_found_handler(request: Request, exc: SourceNotFoundError) -> JSONResponse:
     return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(DocumentAccessDeniedError)
+async def document_access_denied_handler(
+    request: Request, exc: DocumentAccessDeniedError
+) -> JSONResponse:
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
 
 
 @app.exception_handler(UnsupportedSourceTypeError)

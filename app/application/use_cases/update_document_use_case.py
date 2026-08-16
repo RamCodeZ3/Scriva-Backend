@@ -1,22 +1,25 @@
-from uuid import UUID
-
-from application.dtos.document_dtos import DocumentOutput
+from application.dtos.document_dtos import DocumentOutput, UpdateDocumentInput
 from application.exceptions import DocumentAccessDeniedError, DocumentNotFoundError
 from application.ports.document_repository_port import DocumentRepositoryPort
 
 
-class GetDocumentUseCase:
+class UpdateDocumentUseCase:
     def __init__(self, document_repository: DocumentRepositoryPort) -> None:
         self._documents = document_repository
 
-    async def execute(self, document_id: UUID, user_id: UUID) -> DocumentOutput:
-        document = await self._documents.get_by_id(document_id)
+    async def execute(self, data: UpdateDocumentInput) -> DocumentOutput:
+        document = await self._documents.get_by_id(data.document_id)
         if document is None:
-            raise DocumentNotFoundError(f"Document '{document_id}' does not exist.")
-        if document.user_id != user_id:
+            raise DocumentNotFoundError(f"Document '{data.document_id}' does not exist.")
+        if document.user_id != data.user_id:
             raise DocumentAccessDeniedError(
-                f"Document '{document_id}' does not belong to this account."
+                f"Document '{data.document_id}' does not belong to this account."
             )
+
+        document.update_content(
+            title=data.title, sections=data.sections, presentation=data.presentation
+        )
+        await self._documents.save(document)
 
         return DocumentOutput(
             id=document.id,
