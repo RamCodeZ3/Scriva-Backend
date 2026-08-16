@@ -14,6 +14,7 @@ from application.exceptions import (
     UserAlreadyExistsError,
     UserNotFoundError,
 )
+from domain.exceptions import DocumentBuildError, InvalidSourceError
 
 from api.v1.documents import router as documents_router
 
@@ -44,6 +45,16 @@ async def document_access_denied_handler(
     request: Request, exc: DocumentAccessDeniedError
 ) -> JSONResponse:
     return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(DocumentBuildError)
+async def document_build_error_handler(request: Request, exc: DocumentBuildError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(InvalidSourceError)
+async def invalid_source_error_handler(request: Request, exc: InvalidSourceError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 @app.exception_handler(UnsupportedSourceTypeError)

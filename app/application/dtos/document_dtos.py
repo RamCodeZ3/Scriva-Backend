@@ -56,6 +56,14 @@ class UpdateDocumentInput:
 
 
 @dataclass(frozen=True)
+class AugmentDocumentInput:
+    document_id: UUID
+    user_id: UUID
+    sources: list[str]
+    additional_notes: str | None = None
+
+
+@dataclass(frozen=True)
 class DocumentStatusOutput:
     document_id: UUID
     status: DocumentStatus

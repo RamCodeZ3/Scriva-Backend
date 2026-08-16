@@ -20,3 +20,21 @@ class DocumentWriterPort(ABC):
         additional_notes: str | None = None,
     ) -> tuple[str, list[APASection], list[SourceReference]]:
         raise NotImplementedError
+
+    @abstractmethod
+    async def augment(
+        self,
+        *,
+        existing_sections: list[APASection],
+        existing_references: list[SourceReference],
+        new_content: str,
+        document_type: DocumentType,
+        presentation: PresentationInfo,
+        additional_notes: str | None = None,
+    ) -> tuple[str, list[APASection], list[SourceReference]]:
+        """
+        Merges `new_content` into an existing document's sections.
+        Implementations should avoid re-emitting sections the new
+        content doesn't affect, to keep output tokens down.
+        """
+        raise NotImplementedError

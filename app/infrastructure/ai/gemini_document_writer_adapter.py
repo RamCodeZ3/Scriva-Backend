@@ -25,10 +25,7 @@ _SECTION_ORDER = [
 
 _SUBHEADING_TOKEN = "## "
 
-_SYSTEM_INSTRUCTION = (
-    "You are an academic writing assistant. You write complete, well "
-    "structured documents strictly following APA 7 formatting rules, in "
-    "the same language as the source content.\n\n"
+_FORMAT_RULES = (
     "CRITICAL OUTPUT RULES — violating these breaks the document renderer, "
     "which treats every field as plain text, not Markdown or HTML:\n"
     "1. Never use Markdown or HTML syntax anywhere: no '#', '##', '###', "
@@ -38,21 +35,48 @@ _SYSTEM_INSTRUCTION = (
     "2. The ONLY exception: inside a section's 'content', when you start a "
     f"new subtopic, put that subtopic's heading alone on its own line, "
     f"prefixed with exactly '{_SUBHEADING_TOKEN}' (two hash characters and "
-    "one space) and nothing else on that line — no bold, no numbering, no "
-    "trailing punctuation. Use this sparingly, only for genuine subtopic "
-    "breaks, and only inside the 'body' section unless another section "
-    "truly needs it.\n"
-    "3. The document 'title' you generate must be a short, properly "
-    "capitalized academic title written in your own words, in the same "
-    "language as the source. It must NEVER be a URL, NEVER be copied "
-    "verbatim from the source text, and must be at most ~12 words.\n"
-    "4. Every section 'title' (e.g. for introduction, body, conclusion) "
-    "must likewise be a short heading in your own words, never a URL and "
-    "never verbatim source text.\n"
-    "5. If the user's additional notes contain a questionnaire (a list of "
+    "one space) and nothing else on that line. Use this sparingly, only "
+    "for genuine subtopic breaks, and only inside 'body' unless another "
+    "section truly needs it.\n"
+    "3. Titles (document title and every section title) must be short, "
+    "original, in your own words, in the source's language, NEVER a URL, "
+    "NEVER copied verbatim from source text, at most ~12 words."
+)
+
+_SYSTEM_INSTRUCTION = (
+    "You are an academic writing assistant. You write complete, well "
+    "structured documents strictly following APA 7 formatting rules, in "
+    "the same language as the source content.\n\n"
+    f"{_FORMAT_RULES}\n"
+    "4. If the user's additional notes contain a questionnaire (a list of "
     "questions to answer), address every question explicitly and "
-    "completely inside the 'body' section, in prose, while still "
-    "producing all six required sections normally.\n"
+    "completely inside 'body', while still producing all six required "
+    "sections normally.\n"
+    "You always answer with a single JSON object and nothing else — no "
+    "markdown fences, no commentary, no preamble."
+)
+
+_AUGMENT_SYSTEM_INSTRUCTION = (
+    "You are an academic writing assistant. You update an EXISTING APA 7 "
+    "document with new source material, deciding per-section whether it "
+    "needs to change.\n\n"
+    f"{_FORMAT_RULES}\n"
+    "4. For every section, decide: if the new material doesn't affect it, "
+    "return it with \"unchanged\": true and nothing else — do NOT repeat "
+    "its old text, that wastes tokens. If it does, return the FULL updated "
+    "'title' and 'content' for that section.\n"
+    "5. If the new material is a genuinely new subtopic not covered yet in "
+    "'body', add it as a new subheading block using the token from rule 2, "
+    "appended at a sensible point — don't just tack it onto an unrelated "
+    "paragraph.\n"
+    "6. If the new material complements or extends a topic already present "
+    "in 'body', merge it into that existing paragraph/subtopic instead of "
+    "duplicating it as a separate block.\n"
+    "7. Update 'index', 'sources' and 'conclusion' if the new content "
+    "changes what they should say; otherwise mark them unchanged.\n"
+    "8. 'introduction' and 'presentation' are almost never affected by new "
+    "material — mark them unchanged unless it truly changes the document's "
+    "overall scope.\n"
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
 )
@@ -81,22 +105,44 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             presentation=presentation,
             additional_notes=additional_notes,
         )
+        raw_text = await self._generate(prompt, system_instruction=_SYSTEM_INSTRUCTION)
+        return self._parse_response(raw_text)
 
+    async def augment(
+        self,
+        *,
+        existing_sections: list[APASection],
+        existing_references: list[SourceReference],
+        new_content: str,
+        document_type: DocumentType,
+        presentation: PresentationInfo,
+        additional_notes: str | None = None,
+    ) -> tuple[str, list[APASection], list[SourceReference]]:
+        prompt = self._build_augment_prompt(
+            existing_sections=existing_sections,
+            existing_references=existing_references,
+            new_content=new_content,
+            document_type=document_type,
+            presentation=presentation,
+            additional_notes=additional_notes,
+        )
+        raw_text = await self._generate(prompt, system_instruction=_AUGMENT_SYSTEM_INSTRUCTION)
+        return self._parse_augment_response(raw_text, existing_sections=existing_sections)
+
+    async def _generate(self, prompt: str, *, system_instruction: str) -> str:
         try:
             response = await self._client.aio.models.generate_content(
                 model=self._model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    system_instruction=_SYSTEM_INSTRUCTION,
+                    system_instruction=system_instruction,
                     response_mime_type="application/json",
                     temperature=0.3,
                 ),
             )
-            raw_text = response.text
+            return response.text
         except Exception as exc:
             raise DocumentBuildError(f"Gemini request failed: {exc}") from exc
-
-        return self._parse_response(raw_text, fallback_title=title)
 
     def _build_prompt(
         self,
@@ -108,7 +154,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         additional_notes: str | None,
     ) -> str:
         section_names = ", ".join(s.value for s in _SECTION_ORDER)
-        notes = additional_notes.strip() if additional_notes and additional_notes.strip() else "None"
+        notes = _clean_notes(additional_notes)
         return f"""
 Write a "{document_type.value}" document, following APA 7 rules, based
 exclusively on the source material below.
@@ -118,7 +164,7 @@ subject — do NOT copy it verbatim, and especially never use it if it is a
 URL): "{title}"
 
 Additional notes from the user (extraction guidance, tone, focus, or a
-questionnaire to answer inside "body" — see rule 5): {notes}
+questionnaire to answer inside "body"): {notes}
 
 Required sections, in this exact order: {section_names}.
 
@@ -149,21 +195,73 @@ heading, used sparingly inside "body".
 --- SOURCE MATERIAL END ---
 """.strip()
 
+    def _build_augment_prompt(
+        self,
+        *,
+        existing_sections: list[APASection],
+        existing_references: list[SourceReference],
+        new_content: str,
+        document_type: DocumentType,
+        presentation: PresentationInfo,
+        additional_notes: str | None,
+    ) -> str:
+        notes = _clean_notes(additional_notes)
+        existing_sections_json = json.dumps(
+            [
+                {"section_type": s.section_type.value, "title": s.title, "content": s.content}
+                for s in existing_sections
+            ],
+            ensure_ascii=False,
+        )
+        existing_refs_json = json.dumps(
+            [
+                {"author": r.author, "year": r.year, "title": r.title, "url": r.url}
+                for r in existing_references
+            ],
+            ensure_ascii=False,
+        )
+        return f"""
+This is an existing "{document_type.value}" APA 7 document you must update
+with new source material — not rewrite from scratch.
+
+Existing sections (JSON, one entry per section_type): {existing_sections_json}
+
+Existing references (JSON): {existing_refs_json}
+
+Presentation/cover page data: {presentation}
+
+User's additional notes for this update: {notes}
+
+New source material to incorporate:
+--- NEW MATERIAL START ---
+{new_content}
+--- NEW MATERIAL END ---
+
+Respond with a single JSON object shaped exactly like this:
+{{
+  "title": "usually the same title as before, unless it must change",
+  "sections": [
+    {{"section_type": "presentation", "unchanged": true}},
+    {{"section_type": "index", "title": "...", "content": "..."}},
+    {{"section_type": "introduction", "unchanged": true}},
+    {{"section_type": "body", "title": "...", "content": "..."}},
+    {{"section_type": "conclusion", "title": "...", "content": "..."}},
+    {{"section_type": "sources", "title": "...", "content": "..."}}
+  ],
+  "references": [
+    {{"author": "...", "year": "...", "title": "...", "url": "..."}}
+  ]
+}}
+
+Every section_type must appear exactly once, either as "unchanged": true
+or with full "title"/"content". "references" must be the complete,
+de-duplicated list (old entries plus any genuinely new ones).
+""".strip()
+
     def _parse_response(
-        self, raw_text: str, *, fallback_title: str
+        self, raw_text: str
     ) -> tuple[str, list[APASection], list[SourceReference]]:
-        text = raw_text.strip()
-        if text.startswith("```"):
-            text = text.strip("`")
-            if text.lower().startswith("json"):
-                text = text[4:]
-            text = text.strip()
-
-        try:
-            data, _ = json.JSONDecoder().raw_decode(text)
-        except json.JSONDecodeError as exc:
-            raise DocumentBuildError(f"Gemini did not return valid JSON: {exc}") from exc
-
+        data = _decode_json(raw_text)
         title = self._validate_title(data.get("title"), field="title")
 
         raw_sections = data.get("sections")
@@ -182,8 +280,54 @@ heading, used sparingly inside "body".
         except (KeyError, ValueError) as exc:
             raise DocumentBuildError(f"Malformed section in Gemini response: {exc}") from exc
 
+        references = self._parse_references(data)
+        return title, sections, references
+
+    def _parse_augment_response(
+        self, raw_text: str, *, existing_sections: list[APASection]
+    ) -> tuple[str, list[APASection], list[SourceReference]]:
+        data = _decode_json(raw_text)
+        title = self._validate_title(data.get("title"), field="title")
+
+        raw_sections = data.get("sections")
+        if not raw_sections:
+            raise DocumentBuildError("Gemini response has no 'sections'.")
+
+        existing_by_type = {s.section_type: s for s in existing_sections}
+        sections: list[APASection] = []
+        for s in raw_sections:
+            try:
+                section_type = APASectionType(s["section_type"])
+            except (KeyError, ValueError) as exc:
+                raise DocumentBuildError(f"Malformed section in Gemini response: {exc}") from exc
+
+            if s.get("unchanged"):
+                existing = existing_by_type.get(section_type)
+                if existing is None:
+                    raise DocumentBuildError(
+                        f"Gemini marked '{section_type.value}' unchanged but no "
+                        "prior version exists."
+                    )
+                sections.append(existing)
+                continue
+
+            try:
+                sections.append(
+                    APASection(
+                        section_type=section_type,
+                        title=self._validate_title(s["title"], field="section title"),
+                        content=s["content"],
+                    )
+                )
+            except KeyError as exc:
+                raise DocumentBuildError(f"Malformed section in Gemini response: {exc}") from exc
+
+        references = self._parse_references(data)
+        return title, sections, references
+
+    def _parse_references(self, data: dict) -> list[SourceReference]:
         try:
-            references = [
+            return [
                 SourceReference(
                     author=r.get("author", ""),
                     year=r.get("year", ""),
@@ -196,8 +340,6 @@ heading, used sparingly inside "body".
             raise DocumentBuildError(
                 f"Malformed reference in Gemini response: {exc}"
             ) from exc
-
-        return title, sections, references
 
     def _validate_title(self, value: object, *, field: str) -> str:
         if not isinstance(value, str) or not value.strip():
@@ -213,3 +355,21 @@ heading, used sparingly inside "body".
                 f"({len(candidate)} chars) — looks like copied source text."
             )
         return candidate
+
+
+def _clean_notes(additional_notes: str | None) -> str:
+    return additional_notes.strip() if additional_notes and additional_notes.strip() else "None"
+
+
+def _decode_json(raw_text: str) -> dict:
+    text = raw_text.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    try:
+        data, _ = json.JSONDecoder().raw_decode(text)
+    except json.JSONDecodeError as exc:
+        raise DocumentBuildError(f"Gemini did not return valid JSON: {exc}") from exc
+    return data

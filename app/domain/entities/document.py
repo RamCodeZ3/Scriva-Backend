@@ -123,6 +123,24 @@ class Document:
             self.presentation = presentation
         self._touch()
 
+    def augment(
+        self,
+        title: str,
+        sections: list[APASection],
+        sources: list[SourceReference],
+        new_raw_sources: list[Source],
+    ) -> None:
+        if self.status != DocumentStatus.DONE:
+            raise DocumentBuildError(
+                f"Cannot add info to a document in '{self.status.value}' status; "
+                "it must be 'done'."
+            )
+        self.title = title
+        self.sections = sorted(sections, key=lambda s: s.section_type.order)
+        self.sources = sources
+        self.raw_sources = self.raw_sources + new_raw_sources
+        self._touch()
+
     def fail(self, reason: str) -> None:
         self.status = DocumentStatus.FAILED
         self.error_message = reason

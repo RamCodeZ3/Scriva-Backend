@@ -9,13 +9,15 @@ from domain.value_objects.apa_structure import APASection, APASectionType
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 
-from application.dtos.document_dtos import CreateDocumentInput, UpdateDocumentInput
+from application.dtos.document_dtos import AugmentDocumentInput, CreateDocumentInput, UpdateDocumentInput
+from application.use_cases.augment_document_use_case import AugmentDocumentUseCase
 from application.use_cases.create_document_use_case import CreateDocumentUseCase
 from application.use_cases.delete_document_use_case import DeleteDocumentUseCase
 from application.use_cases.get_document_use_case import GetDocumentUseCase
 from application.use_cases.update_document_use_case import UpdateDocumentUseCase
 
 from api.deps import (
+    get_augment_document_use_case,
     get_create_document_use_case,
     get_current_user,
     get_delete_document_use_case,
@@ -23,6 +25,7 @@ from api.deps import (
     get_update_document_use_case,
 )
 from api.schemas.documents import (
+    AugmentDocumentRequest,
     CreateDocumentRequest,
     CreateDocumentResponse,
     DeleteDocumentResponse,
@@ -86,6 +89,36 @@ async def get_document(
     use_case: GetDocumentUseCase = Depends(get_get_document_use_case),
 ) -> DocumentGetResponse:
     result = await use_case.execute(document_id, current_user.id)
+
+    return DocumentGetResponse(
+        id=str(result.id),
+        title=result.title,
+        document_type=result.document_type.value,
+        status=result.status.value,
+        sections=_sections_out(result.sections),
+        user_id=str(result.user_id),
+        presentation=_presentation_out(result.presentation),
+        error_message=result.error_message,
+        source_ids=[str(sid) for sid in result.source_ids],
+        created_at=result.created_at.isoformat(),
+        updated_at=result.updated_at.isoformat(),
+    )
+
+
+@router.patch("/ia/{document_id}", response_model=DocumentGetResponse)
+async def augment_document(
+    document_id: UUID,
+    body: AugmentDocumentRequest,
+    current_user: User = Depends(get_current_user),
+    use_case: AugmentDocumentUseCase = Depends(get_augment_document_use_case),
+) -> DocumentGetResponse:
+    data = AugmentDocumentInput(
+        document_id=document_id,
+        user_id=current_user.id,
+        sources=body.sources,
+        additional_notes=body.additional_notes,
+    )
+    result = await use_case.execute(data)
 
     return DocumentGetResponse(
         id=str(result.id),

@@ -18,6 +18,7 @@ from application.ports.extractor_factory_port import ExtractorFactoryPort
 from application.ports.google_credentials_port import GoogleCredentialsPort
 from application.ports.source_repository_port import SourceRepositoryPort
 from application.ports.user_repository_port import UserRepositoryPort
+from application.use_cases.augment_document_use_case import AugmentDocumentUseCase
 from application.use_cases.create_document_use_case import CreateDocumentUseCase
 from application.use_cases.delete_document_use_case import DeleteDocumentUseCase
 from application.use_cases.get_document_use_case import GetDocumentUseCase
@@ -229,3 +230,17 @@ def get_delete_document_use_case(
     document_repository: DocumentRepositoryPort = Depends(get_document_repository),
 ) -> DeleteDocumentUseCase:
     return DeleteDocumentUseCase(document_repository)
+
+
+def get_augment_document_use_case(
+    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
+    source_repository: SourceRepositoryPort = Depends(get_source_repository),
+    extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
+    document_writer: DocumentWriterPort = Depends(get_document_writer),
+) -> AugmentDocumentUseCase:
+    return AugmentDocumentUseCase(
+        document_repository=document_repository,
+        source_repository=source_repository,
+        extractor_factory=extractor_factory,
+        document_writer=document_writer,
+    )

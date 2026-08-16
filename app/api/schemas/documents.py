@@ -70,3 +70,8 @@ class DocumentPatchResponse(BaseModel):
 class DeleteDocumentResponse(BaseModel):
     status: str
     document_id: str
+
+
+class AugmentDocumentRequest(BaseModel):
+    sources: list[str] = Field(..., min_length=1)
+    additional_notes: str | None = None
