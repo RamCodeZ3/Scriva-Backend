@@ -14,6 +14,8 @@ from domain.value_objects.source_ref import SourceReference
 
 from application.ports.document_writer_port import DocumentWriterPort
 
+_SUBHEADING_TOKEN="## "
+
 _SECTION_ORDER = [
     APASectionType.PRESENTATION,
     APASectionType.INDEX,
@@ -23,22 +25,36 @@ _SECTION_ORDER = [
     APASectionType.SOURCES,
 ]
 
-_SUBHEADING_TOKEN = "## "
-
 _FORMAT_RULES = (
-    "CRITICAL OUTPUT RULES — violating these breaks the document renderer, "
-    "which treats every field as plain text, not Markdown or HTML:\n"
-    "1. Never use Markdown or HTML syntax anywhere: no '#', '##', '###', "
-    "no '**bold**', no '*italic*', no '`code`', no '- ' or '* ' bullet "
-    "lists, no numbered lists like '1. '. Write everything as normal "
-    "academic prose, in full sentences and paragraphs.\n"
-    "2. The ONLY exception: inside a section's 'content', when you start a "
-    f"new subtopic, put that subtopic's heading alone on its own line, "
-    f"prefixed with exactly '{_SUBHEADING_TOKEN}' (two hash characters and "
-    "one space) and nothing else on that line. Use this sparingly, only "
-    "for genuine subtopic breaks, and only inside 'body' unless another "
-    "section truly needs it.\n"
-    "3. Titles (document title and every section title) must be short, "
+    "CRITICAL OUTPUT RULES — the renderer interprets a small, specific "
+    "subset of Markdown and nothing else. Anything outside this subset "
+    "breaks formatting, so follow these exactly:\n"
+    "1. Write in normal academic prose, in full sentences and paragraphs. "
+    "Do NOT use '#', '###', backticks, single-asterisk/underscore italics, "
+    "or any Markdown beyond what is explicitly allowed in rules 2-4 below.\n"
+    "2. Subtopic headings: when starting a new subtopic inside 'body' "
+    "(rarely elsewhere), put that heading alone on its own line, prefixed "
+    f"with exactly '{_SUBHEADING_TOKEN}' and nothing else on that line. "
+    "Use this sparingly, only for genuine subtopic breaks.\n"
+    "3. Emphasis: you may use **bold** for key terms and __underline__ for "
+    "titles or terms that require underlining, but only where it is "
+    "genuinely useful. Never bold or underline whole sentences, and do not "
+    "overuse either.\n"
+    "4. Lists: you may use a bullet list (lines starting with '- ') or a "
+    "numbered list (lines starting with '1. ', '2. ', etc.), following "
+    "APA 7 rules: use bullets ONLY when the items have no meaningful order, "
+    "priority, or hierarchy among them (equivalent characteristics, "
+    "examples, parallel items); use numbers when the items follow a "
+    "sequence of steps, a chronology, or a ranked hierarchy. Every item in "
+    "a list must be grammatically parallel with the others (all full "
+    "sentences, or all short fragments — not mixed). Lists are the "
+    "exception, not the default — most content should stay in ordinary "
+    "prose paragraphs, and you should not reach for a list unless the "
+    "content is genuinely list-like.\n"
+    "5. Paragraphs: keep paragraphs short and centered on a single idea. "
+    "Never merge several distinct ideas into one long paragraph — split "
+    "them into separate, focused paragraphs instead.\n"
+    "6. Titles (document title and every section title) must be short, "
     "original, in your own words, in the source's language, NEVER a URL, "
     "NEVER copied verbatim from source text, at most ~12 words."
 )
@@ -48,10 +64,24 @@ _SYSTEM_INSTRUCTION = (
     "structured documents strictly following APA 7 formatting rules, in "
     "the same language as the source content.\n\n"
     f"{_FORMAT_RULES}\n"
-    "4. If the user's additional notes contain a questionnaire (a list of "
+    "7. If the user's additional notes contain a questionnaire (a list of "
     "questions to answer), address every question explicitly and "
     "completely inside 'body', while still producing all six required "
     "sections normally.\n"
+    "8. The 'presentation' section is REQUIRED and must exist, but it is "
+    "NOT a summary or abstract of the document's topic. Its 'content' must "
+    "restate ONLY the structured presentation data given to you below — "
+    "student name, institution, subject/course, professor, student ID (if "
+    "provided), and today's date — each on its own line, in the source's "
+    "language, exactly as given. Do NOT add a summary of what the document "
+    "is about, do NOT add any sentence that isn't one of those fields, and "
+    "do NOT omit any of the fields that were provided to you.\n"
+    "9. The 'index' section is a short plain-language outline of what each "
+    "section covers, written as prose or a simple list of section names — "
+    "NEVER invent page numbers, since you have no way of knowing how the "
+    "final document will paginate. The renderer builds the authoritative, "
+    "paginated table of contents separately from the real headings; treat "
+    "this section only as a narrative overview.\n"
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
 )
@@ -61,22 +91,28 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     "document with new source material, deciding per-section whether it "
     "needs to change.\n\n"
     f"{_FORMAT_RULES}\n"
-    "4. For every section, decide: if the new material doesn't affect it, "
+    "7. For every section, decide: if the new material doesn't affect it, "
     "return it with \"unchanged\": true and nothing else — do NOT repeat "
     "its old text, that wastes tokens. If it does, return the FULL updated "
     "'title' and 'content' for that section.\n"
-    "5. If the new material is a genuinely new subtopic not covered yet in "
+    "8. If the new material is a genuinely new subtopic not covered yet in "
     "'body', add it as a new subheading block using the token from rule 2, "
     "appended at a sensible point — don't just tack it onto an unrelated "
     "paragraph.\n"
-    "6. If the new material complements or extends a topic already present "
+    "9. If the new material complements or extends a topic already present "
     "in 'body', merge it into that existing paragraph/subtopic instead of "
     "duplicating it as a separate block.\n"
-    "7. Update 'index', 'sources' and 'conclusion' if the new content "
-    "changes what they should say; otherwise mark them unchanged.\n"
-    "8. 'introduction' and 'presentation' are almost never affected by new "
-    "material — mark them unchanged unless it truly changes the document's "
-    "overall scope.\n"
+    "10. Update 'index', 'sources' and 'conclusion' if the new content "
+    "changes what they should say; otherwise mark them unchanged. The "
+    "'index' is a narrative overview only — NEVER invent page numbers, the "
+    "renderer builds the authoritative table of contents separately.\n"
+    "11. 'introduction' is almost never affected by new material — mark it "
+    "unchanged unless the new content truly changes the document's overall "
+    "scope. 'presentation' must always be present too — mark it unchanged "
+    "if the structured presentation data hasn't changed; if it has, regen "
+    "it following the same rule as before: only the structured fields "
+    "(student name, institution, subject, professor, student ID, date), "
+    "one per line, never a summary of the document's topic.\n"
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
 )
@@ -168,7 +204,8 @@ questionnaire to answer inside "body"): {notes}
 
 Required sections, in this exact order: {section_names}.
 
-Presentation/cover page data: {presentation}
+Presentation/cover page data — the 'presentation' section's content must
+restate exactly these fields, one per line, and nothing else: {presentation}
 
 Respond with a single JSON object shaped exactly like this:
 {{
@@ -186,9 +223,10 @@ Respond with a single JSON object shaped exactly like this:
   ]
 }}
 
-Reminder: "content" is plain prose, never Markdown. The only allowed markup
-is a line starting with "{_SUBHEADING_TOKEN}" to introduce a subtopic
-heading, used sparingly inside "body".
+Reminder: "content" is plain academic prose. The only Markdown allowed is
+**bold**, __underline__, "- " bullet lists, "1. " numbered lists (per the
+APA 7 rules above), and a line starting with "{_SUBHEADING_TOKEN}" to
+introduce a subtopic heading — used sparingly, and mostly inside "body".
 
 --- SOURCE MATERIAL START ---
 {source_content}
@@ -228,7 +266,8 @@ Existing sections (JSON, one entry per section_type): {existing_sections_json}
 
 Existing references (JSON): {existing_refs_json}
 
-Presentation/cover page data: {presentation}
+Presentation/cover page data — the 'presentation' section's content must
+restate exactly these fields, one per line, and nothing else: {presentation}
 
 User's additional notes for this update: {notes}
 
