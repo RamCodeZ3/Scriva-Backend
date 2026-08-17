@@ -1,6 +1,11 @@
-from application.dtos.document_dtos import CreateDocumentInput, CreateDocumentOutput
+from application.dtos.document_dtos import (
+    CreateDocumentInput,
+    CreateDocumentOutput,
+)
 from application.exceptions import UserNotFoundError
-from application.ports.document_job_dispatcher_port import DocumentJobDispatcherPort
+from application.ports.document_job_dispatcher_port import (
+    DocumentJobDispatcherPort,
+)
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.source_repository_port import SourceRepositoryPort
 from application.ports.user_repository_port import UserRepositoryPort
@@ -43,7 +48,9 @@ class CreateDocumentUseCase:
 
         await self._dispatcher.dispatch(document.id)
 
-        final_document = await self._documents.get_by_id(document.id) or document
+        final_document = (
+            await self._documents.get_by_id(document.id) or document
+        )
 
         return CreateDocumentOutput(
             document_id=final_document.id,

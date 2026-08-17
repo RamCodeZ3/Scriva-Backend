@@ -30,7 +30,11 @@ class GoogleDocsExporterAdapter(DocumentExporterPort):
         docs_service = build("docs", "v1", credentials=self._credentials)
 
         try:
-            doc = docs_service.documents().create(body={"title": document.title}).execute()
+            doc = (
+                docs_service.documents()
+                .create(body={"title": document.title})
+                .execute()
+            )
             document_id = doc["documentId"]
 
             requests = self._build_requests(document)
@@ -40,7 +44,9 @@ class GoogleDocsExporterAdapter(DocumentExporterPort):
                 ).execute()
 
         except HttpError as exc:
-            raise DocumentBuildError(f"Google Docs export failed: {exc}") from exc
+            raise DocumentBuildError(
+                f"Google Docs export failed: {exc}"
+            ) from exc
 
         return f"https://docs.google.com/document/d/{document_id}/edit"
 
@@ -50,12 +56,24 @@ class GoogleDocsExporterAdapter(DocumentExporterPort):
             body_text = f"{section.content}\n\n"
             heading_text = f"{section.title}\n"
 
-            requests.append({"insertText": {"location": {"index": 1}, "text": body_text}})
-            requests.append({"insertText": {"location": {"index": 1}, "text": heading_text}})
+            requests.append(
+                {"insertText": {"location": {"index": 1}, "text": body_text}}
+            )
+            requests.append(
+                {
+                    "insertText": {
+                        "location": {"index": 1},
+                        "text": heading_text,
+                    }
+                }
+            )
             requests.append(
                 {
                     "updateParagraphStyle": {
-                        "range": {"startIndex": 1, "endIndex": 1 + len(heading_text)},
+                        "range": {
+                            "startIndex": 1,
+                            "endIndex": 1 + len(heading_text),
+                        },
                         "paragraphStyle": {"namedStyleType": "HEADING_1"},
                         "fields": "namedStyleType",
                     }

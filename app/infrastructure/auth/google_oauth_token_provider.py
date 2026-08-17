@@ -8,13 +8,6 @@ from google.oauth2.credentials import Credentials
 
 
 class GoogleOAuthTokenProvider:
-    """
-    Exchanges a stored refresh_token for a short-lived access_token via
-    Google's token endpoint. The refresh_token never leaves this
-    process except to talk to Google — only the resulting access_token
-    goes on to `GoogleDocsExporterAdapter`.
-    """
-
     def __init__(self, client_id: str, client_secret: str) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
@@ -33,6 +26,8 @@ class GoogleOAuthTokenProvider:
         try:
             credentials.refresh(Request())
         except RefreshError as exc:
-            raise ValueError(f"Could not refresh Google access token: {exc}") from exc
+            raise ValueError(
+                f"Could not refresh Google access token: {exc}"
+            ) from exc
 
         return credentials.token

@@ -13,7 +13,9 @@ class WebExtractorAdapter(SourceExtractorPort):
     with JavaScript, using a headless Chromium instance via Playwright.
     """
 
-    def __init__(self, timeout_ms: int = 30_000, wait_until: str = "networkidle") -> None:
+    def __init__(
+        self, timeout_ms: int = 30_000, wait_until: str = "networkidle"
+    ) -> None:
         self._timeout_ms = timeout_ms
         self._wait_until = wait_until
 
@@ -23,7 +25,11 @@ class WebExtractorAdapter(SourceExtractorPort):
                 browser = await pw.chromium.launch(headless=True)
                 try:
                     page = await browser.new_page()
-                    await page.goto(raw, timeout=self._timeout_ms, wait_until=self._wait_until)
+                    await page.goto(
+                        raw,
+                        timeout=self._timeout_ms,
+                        wait_until=self._wait_until,
+                    )
                     text = await page.evaluate("() => document.body.innerText")
                 finally:
                     await browser.close()
@@ -34,7 +40,9 @@ class WebExtractorAdapter(SourceExtractorPort):
 
         cleaned = _clean_text(text)
         if not cleaned:
-            raise InvalidSourceError(f"No readable text content found at '{raw}'.")
+            raise InvalidSourceError(
+                f"No readable text content found at '{raw}'."
+            )
         return cleaned
 
 

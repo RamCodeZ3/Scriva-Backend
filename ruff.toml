@@ -6,10 +6,10 @@ select = ["E", "W", "F", "I", "UP"]
 
 [lint.isort]
 known-first-party = [
-  "domain",
-  "aplication",
-  "infrastructure",
-  "api",
+  "app.domain",
+  "app.application",
+  "app.infrastructure",
+  "app.api",
 ]
 known-third-party = [
   "playwright",

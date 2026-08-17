@@ -12,15 +12,6 @@ from application.ports.user_repository_port import UserRepositoryPort
 
 
 class SupabaseUserRepository(UserRepositoryPort):
-    """
-    Expects a `users` table:
-      id uuid pk, email text unique, name text, is_premium bool,
-      created_at timestamptz, updated_at timestamptz
-
-    supabase-py's client is synchronous, so every call is offloaded to
-    a thread via `asyncio.to_thread` to avoid blocking the event loop.
-    """
-
     _TABLE = "users"
 
     def __init__(self, client: Client) -> None:
@@ -30,14 +21,14 @@ class SupabaseUserRepository(UserRepositoryPort):
         await asyncio.to_thread(self._save_sync, user)
 
     async def get_by_id(self, user_id: UUID) -> User | None:
-        return await asyncio.to_thread(self._get_by_column_sync, "id", str(user_id))
+        return await asyncio.to_thread(
+            self._get_by_column_sync, "id", str(user_id)
+        )
 
     async def get_by_email(self, email: str) -> User | None:
         return await asyncio.to_thread(
             self._get_by_column_sync, "email", email.strip().lower()
         )
-
-    # ── sync helpers (run inside a thread) ──────────────────────────────
 
     def _save_sync(self, user: User) -> None:
         self._client.table(self._TABLE).upsert(self._to_row(user)).execute()

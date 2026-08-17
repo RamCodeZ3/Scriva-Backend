@@ -6,12 +6,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 class InvalidTokenError(Exception):
     """Raised when the bearer token is missing, malformed, or expired."""
 
 
 class SupabaseJWTAuth:
-
     def __init__(
         self,
         project_url: str,

@@ -11,7 +11,9 @@ class UpdateUserProfileUseCase:
     def __init__(self, user_repository: UserRepositoryPort) -> None:
         self._users = user_repository
 
-    async def execute(self, user_id: UUID, data: UpdateUserProfileInput) -> UserOutput:
+    async def execute(
+        self, user_id: UUID, data: UpdateUserProfileInput
+    ) -> UserOutput:
         user = await self._users.get_by_id(user_id)
         if user is None:
             raise UserNotFoundError(f"User '{user_id}' does not exist.")

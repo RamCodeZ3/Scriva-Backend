@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from application.dtos.document_dtos import AugmentDocumentInput, DocumentOutput
-from application.exceptions import DocumentAccessDeniedError, DocumentNotFoundError
+from application.exceptions import (
+    DocumentAccessDeniedError,
+    DocumentNotFoundError,
+)
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
@@ -28,7 +31,9 @@ class AugmentDocumentUseCase:
     async def execute(self, data: AugmentDocumentInput) -> DocumentOutput:
         document = await self._documents.get_by_id(data.document_id)
         if document is None:
-            raise DocumentNotFoundError(f"Document '{data.document_id}' does not exist.")
+            raise DocumentNotFoundError(
+                f"Document '{data.document_id}' does not exist."
+            )
         if document.user_id != data.user_id:
             raise DocumentAccessDeniedError(
                 f"Document '{data.document_id}' does not belong to this account."
@@ -41,13 +46,16 @@ class AugmentDocumentUseCase:
 
         new_sources = [Source.create_auto(raw) for raw in data.sources]
         for source in new_sources:
-            extractor = self._extractor_factory.get_extractor(source.source_type)
+            extractor = self._extractor_factory.get_extractor(
+                source.source_type
+            )
             content = await extractor.extract(source.raw)
             source.mark_extracted(content)
             await self._sources.save(source)
 
         new_content = "\n\n".join(
-            f"[Fuente nueva {i + 1}]\n{s.get_content()}" for i, s in enumerate(new_sources)
+            f"[Fuente nueva {i + 1}]\n{s.get_content()}"
+            for i, s in enumerate(new_sources)
         )
 
         title, sections, references = await self._writer.augment(
@@ -60,7 +68,10 @@ class AugmentDocumentUseCase:
         )
 
         document.augment(
-            title=title, sections=sections, sources=references, new_raw_sources=new_sources
+            title=title,
+            sections=sections,
+            sources=references,
+            new_raw_sources=new_sources,
         )
         await self._documents.save(document)
 

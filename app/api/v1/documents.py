@@ -16,12 +16,22 @@ from application.dtos.document_dtos import (
     ExportDocumentInput,
     UpdateDocumentInput,
 )
-from application.use_cases.augment_document_use_case import AugmentDocumentUseCase
-from application.use_cases.create_document_use_case import CreateDocumentUseCase
-from application.use_cases.delete_document_use_case import DeleteDocumentUseCase
-from application.use_cases.export_document_use_case import ExportDocumentUseCase
+from application.use_cases.augment_document_use_case import (
+    AugmentDocumentUseCase,
+)
+from application.use_cases.create_document_use_case import (
+    CreateDocumentUseCase,
+)
+from application.use_cases.delete_document_use_case import (
+    DeleteDocumentUseCase,
+)
+from application.use_cases.export_document_use_case import (
+    ExportDocumentUseCase,
+)
 from application.use_cases.get_document_use_case import GetDocumentUseCase
-from application.use_cases.update_document_use_case import UpdateDocumentUseCase
+from application.use_cases.update_document_use_case import (
+    UpdateDocumentUseCase,
+)
 
 from api.deps import (
     get_augment_document_use_case,
@@ -106,7 +116,9 @@ async def export_document(
             detail=f"Invalid document_id '{body.document_id}': {exc}",
         ) from exc
 
-    data = ExportDocumentInput(document_id=document_id, user_id=current_user.id, export=body.export)
+    data = ExportDocumentInput(
+        document_id=document_id, user_id=current_user.id, export=body.export
+    )
     result = await use_case.execute(data)
 
     return ExportDocumentResponse(
@@ -115,7 +127,9 @@ async def export_document(
         export=body.export,
         url=result.url,
         file_base64=(
-            base64.b64encode(result.file_bytes).decode("ascii") if result.file_bytes else None
+            base64.b64encode(result.file_bytes).decode("ascii")
+            if result.file_bytes
+            else None
         ),
         file_name=result.file_name,
         content_type=result.content_type,
@@ -187,7 +201,9 @@ async def update_document(
         try:
             sections = [
                 APASection(
-                    section_type=APASectionType(s.section_type), title=s.title, content=s.content
+                    section_type=APASectionType(s.section_type),
+                    title=s.title,
+                    content=s.content,
                 )
                 for s in body.sections
             ]
@@ -236,7 +252,9 @@ async def delete_document(
     use_case: DeleteDocumentUseCase = Depends(get_delete_document_use_case),
 ) -> DeleteDocumentResponse:
     await use_case.execute(document_id, current_user.id)
-    return DeleteDocumentResponse(status="deleted", document_id=str(document_id))
+    return DeleteDocumentResponse(
+        status="deleted", document_id=str(document_id)
+    )
 
 
 def _title_snippet(body: CreateDocumentRequest) -> str:
@@ -248,7 +266,9 @@ def _title_snippet(body: CreateDocumentRequest) -> str:
 
 def _sections_out(sections) -> list[DocumentSectionOut]:
     return [
-        DocumentSectionOut(section_type=s.section_type.value, title=s.title, content=s.content)
+        DocumentSectionOut(
+            section_type=s.section_type.value, title=s.title, content=s.content
+        )
         for s in sections
     ]
 

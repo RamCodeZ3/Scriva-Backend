@@ -9,15 +9,6 @@ from application.ports.source_extractor_port import SourceExtractorPort
 
 
 class FileExtractorAdapter(SourceExtractorPort):
-    """
-    Extracts plain text from an uploaded file. `raw` is expected to be a
-    local path where the API layer already stored the upload (e.g. a
-    temp dir or a Supabase Storage download) before this adapter runs.
-
-    Supports .txt, .pdf and .docx out of the box; extend `_read_sync`
-    for any other format you need to accept.
-    """
-
     def __init__(self, max_chars: int | None = 200_000) -> None:
         self._max_chars = max_chars
 
@@ -32,7 +23,9 @@ class FileExtractorAdapter(SourceExtractorPort):
         except InvalidSourceError:
             raise
         except Exception as exc:
-            raise InvalidSourceError(f"Could not read file '{raw}': {exc}") from exc
+            raise InvalidSourceError(
+                f"Could not read file '{raw}': {exc}"
+            ) from exc
 
         content = content.strip()
         if not content:

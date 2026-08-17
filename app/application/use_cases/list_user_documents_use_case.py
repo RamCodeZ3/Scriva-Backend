@@ -7,16 +7,6 @@ from application.ports.user_repository_port import UserRepositoryPort
 
 
 class ListUserDocumentsUseCase:
-    """
-    Returns a status summary of every document created by a user
-    (e.g. for a "my documents" dashboard).
-
-    NOTE: relies on `DocumentRepositoryPort.list_by_user`, which in turn
-    requires the Document aggregate/persistence model to track
-    ownership. Add a `user_id` field to `Document` (or an equivalent
-    column in the Supabase table) before implementing that adapter.
-    """
-
     def __init__(
         self,
         document_repository: DocumentRepositoryPort,

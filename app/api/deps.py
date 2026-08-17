@@ -11,44 +11,84 @@ from domain.entities.user import User
 
 from dotenv import load_dotenv
 
-from application.ports.document_exporter_resolver_port import DocumentExporterResolverPort
+from application.ports.document_exporter_resolver_port import (
+    DocumentExporterResolverPort,
+)
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
 from application.ports.google_credentials_port import GoogleCredentialsPort
 from application.ports.source_repository_port import SourceRepositoryPort
 from application.ports.user_repository_port import UserRepositoryPort
-from application.use_cases.augment_document_use_case import AugmentDocumentUseCase
-from application.use_cases.create_document_use_case import CreateDocumentUseCase
-from application.use_cases.delete_document_use_case import DeleteDocumentUseCase
-from application.use_cases.export_document_use_case import ExportDocumentUseCase
+from application.use_cases.augment_document_use_case import (
+    AugmentDocumentUseCase,
+)
+from application.use_cases.create_document_use_case import (
+    CreateDocumentUseCase,
+)
+from application.use_cases.delete_document_use_case import (
+    DeleteDocumentUseCase,
+)
+from application.use_cases.export_document_use_case import (
+    ExportDocumentUseCase,
+)
 from application.use_cases.get_document_use_case import GetDocumentUseCase
-from application.use_cases.process_document_use_case import ProcessDocumentUseCase
-from application.use_cases.update_document_use_case import UpdateDocumentUseCase
+from application.use_cases.process_document_use_case import (
+    ProcessDocumentUseCase,
+)
+from application.use_cases.update_document_use_case import (
+    UpdateDocumentUseCase,
+)
 
-from infrastructure.ai.gemini_document_writer_adapter import GeminiDocumentWriterAdapter
-from infrastructure.auth.google_oauth_token_provider import GoogleOAuthTokenProvider
-from infrastructure.auth.supabase_jwt_auth import InvalidTokenError, SupabaseJWTAuth
+from infrastructure.ai.gemini_document_writer_adapter import (
+    GeminiDocumentWriterAdapter,
+)
+from infrastructure.auth.google_oauth_token_provider import (
+    GoogleOAuthTokenProvider,
+)
+from infrastructure.auth.supabase_jwt_auth import (
+    InvalidTokenError,
+    SupabaseJWTAuth,
+)
 from infrastructure.export.document_exporter_resolver_adapter import (
     DocumentExporterResolverAdapter,
 )
-from infrastructure.export.pdf_document_exporter_adapter import PdfDocumentExporterAdapter
-from infrastructure.extractors.extractor_factory_adapter import ExtractorFactoryAdapter
-from infrastructure.extractors.file_extractor_adapter import FileExtractorAdapter
-from infrastructure.extractors.text_extractor_adapter import PlainTextExtractorAdapter
+from infrastructure.export.pdf_document_exporter_adapter import (
+    PdfDocumentExporterAdapter,
+)
+from infrastructure.extractors.extractor_factory_adapter import (
+    ExtractorFactoryAdapter,
+)
+from infrastructure.extractors.file_extractor_adapter import (
+    FileExtractorAdapter,
+)
+from infrastructure.extractors.text_extractor_adapter import (
+    PlainTextExtractorAdapter,
+)
 from infrastructure.extractors.web_extractor_adapter import WebExtractorAdapter
-from infrastructure.extractors.youtube_extractor_adapter import YoutubeExtractorAdapter
-from infrastructure.jobs.sync_job_dispatcher_adapter import SyncJobDispatcherAdapter
+from infrastructure.extractors.youtube_extractor_adapter import (
+    YoutubeExtractorAdapter,
+)
+from infrastructure.jobs.sync_job_dispatcher_adapter import (
+    SyncJobDispatcherAdapter,
+)
 from infrastructure.persistence.supabase_client import build_supabase_client
-from infrastructure.persistence.supabase_document_repository import SupabaseDocumentRepository
+from infrastructure.persistence.supabase_document_repository import (
+    SupabaseDocumentRepository,
+)
 from infrastructure.persistence.supabase_google_credentials_repository import (
     SupabaseGoogleCredentialsRepository,
 )
-from infrastructure.persistence.supabase_source_repository import SupabaseSourceRepository
-from infrastructure.persistence.supabase_user_repository import SupabaseUserRepository
+from infrastructure.persistence.supabase_source_repository import (
+    SupabaseSourceRepository,
+)
+from infrastructure.persistence.supabase_user_repository import (
+    SupabaseUserRepository,
+)
 
 
 # ── Process-wide singletons ─────────────────────────────────────────────
+
 
 @lru_cache
 def get_supabase_client():
@@ -118,6 +158,7 @@ def get_document_exporter_resolver() -> DocumentExporterResolverPort:
 
 # ── Repositories ─────────────────────────────────────────────────────────
 
+
 def get_user_repository() -> UserRepositoryPort:
     return SupabaseUserRepository(get_supabase_client())
 
@@ -134,6 +175,7 @@ def get_document_repository(
 
 # ── Auth ─────────────────────────────────────────────────────────────────
 
+
 async def get_current_user_id(
     authorization: str = Header(..., alias="Authorization"),
     jwt_auth: SupabaseJWTAuth = Depends(get_jwt_auth),
@@ -149,20 +191,23 @@ async def get_current_user_id(
         payload = jwt_auth.decode(token)
     except InvalidTokenError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid token: {exc}"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {exc}",
         ) from exc
 
     sub = payload.get("sub")
     if not sub:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has no 'sub' claim."
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has no 'sub' claim.",
         )
 
     try:
         return UUID(sub)
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token 'sub' is not a valid UUID."
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token 'sub' is not a valid UUID.",
         ) from exc
 
 
@@ -181,8 +226,11 @@ async def get_current_user(
 
 # ── Use cases ────────────────────────────────────────────────────────────
 
+
 def get_process_document_use_case(
-    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
+    document_repository: DocumentRepositoryPort = Depends(
+        get_document_repository
+    ),
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
     extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
     document_writer: DocumentWriterPort = Depends(get_document_writer),
@@ -196,10 +244,14 @@ def get_process_document_use_case(
 
 
 def get_create_document_use_case(
-    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
+    document_repository: DocumentRepositoryPort = Depends(
+        get_document_repository
+    ),
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
     user_repository: UserRepositoryPort = Depends(get_user_repository),
-    process_use_case: ProcessDocumentUseCase = Depends(get_process_document_use_case),
+    process_use_case: ProcessDocumentUseCase = Depends(
+        get_process_document_use_case
+    ),
 ) -> CreateDocumentUseCase:
     dispatcher = SyncJobDispatcherAdapter(process_use_case)
     return CreateDocumentUseCase(
@@ -211,25 +263,33 @@ def get_create_document_use_case(
 
 
 def get_get_document_use_case(
-    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
+    document_repository: DocumentRepositoryPort = Depends(
+        get_document_repository
+    ),
 ) -> GetDocumentUseCase:
     return GetDocumentUseCase(document_repository)
 
 
 def get_update_document_use_case(
-    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
+    document_repository: DocumentRepositoryPort = Depends(
+        get_document_repository
+    ),
 ) -> UpdateDocumentUseCase:
     return UpdateDocumentUseCase(document_repository)
 
 
 def get_delete_document_use_case(
-    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
+    document_repository: DocumentRepositoryPort = Depends(
+        get_document_repository
+    ),
 ) -> DeleteDocumentUseCase:
     return DeleteDocumentUseCase(document_repository)
 
 
 def get_augment_document_use_case(
-    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
+    document_repository: DocumentRepositoryPort = Depends(
+        get_document_repository
+    ),
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
     extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
     document_writer: DocumentWriterPort = Depends(get_document_writer),
@@ -243,8 +303,12 @@ def get_augment_document_use_case(
 
 
 def get_export_document_use_case(
-    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
-    exporter_resolver: DocumentExporterResolverPort = Depends(get_document_exporter_resolver),
+    document_repository: DocumentRepositoryPort = Depends(
+        get_document_repository
+    ),
+    exporter_resolver: DocumentExporterResolverPort = Depends(
+        get_document_exporter_resolver
+    ),
 ) -> ExportDocumentUseCase:
     return ExportDocumentUseCase(
         document_repository=document_repository,

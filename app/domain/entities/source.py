@@ -11,26 +11,27 @@ from domain.exceptions import InvalidSourceError
 
 
 class SourceType(Enum):
-    WEB     = "web"
+    WEB = "web"
     YOUTUBE = "youtube"
-    FILE    = "file"
-    TEXT    = "text"
+    FILE = "file"
+    TEXT = "text"
 
 
 class SourceStatus(Enum):
-    PENDING   = "pending"
+    PENDING = "pending"
     EXTRACTED = "extracted"
-    FAILED    = "failed"
+    FAILED = "failed"
 
 
 class FileKind(Enum):
     DOCUMENT = "document"
-    VIDEO    = "video"
-    AUDIO    = "audio"
+    VIDEO = "video"
+    AUDIO = "audio"
 
 
 _YOUTUBE_RE = re.compile(
-    r"(youtube\.com/(watch\?v=|shorts/|embed/|live/)|youtu\.be/)", re.IGNORECASE
+    r"(youtube\.com/(watch\?v=|shorts/|embed/|live/)|youtu\.be/)",
+    re.IGNORECASE,
 )
 _URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
@@ -74,7 +75,12 @@ class Source:
 
     @classmethod
     def create(cls, raw: str, source_type: SourceType) -> Source:
-        return cls(id=uuid4(), source_type=source_type, raw=raw, status=SourceStatus.PENDING)
+        return cls(
+            id=uuid4(),
+            source_type=source_type,
+            raw=raw,
+            status=SourceStatus.PENDING,
+        )
 
     @classmethod
     def create_auto(cls, raw: str) -> Source:
