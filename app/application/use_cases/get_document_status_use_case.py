@@ -18,7 +18,9 @@ class GetDocumentStatusUseCase:
     async def execute(self, document_id: UUID) -> DocumentStatusOutput:
         document = await self._documents.get_by_id(document_id)
         if document is None:
-            raise DocumentNotFoundError(f"Document '{document_id}' does not exist.")
+            raise DocumentNotFoundError(
+                f"Document '{document_id}' does not exist."
+            )
 
         return DocumentStatusOutput(
             document_id=document.id,

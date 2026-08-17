@@ -17,7 +17,9 @@ class ExtractorFactoryAdapter(ExtractorFactoryPort):
         })
     """
 
-    def __init__(self, extractors: dict[SourceType, SourceExtractorPort]) -> None:
+    def __init__(
+        self, extractors: dict[SourceType, SourceExtractorPort]
+    ) -> None:
         self._extractors = extractors
 
     def get_extractor(self, source_type: SourceType) -> SourceExtractorPort:

@@ -27,12 +27,22 @@ class YoutubeExtractorAdapter(SourceExtractorPort):
         video_id = self._extract_video_id(raw)
         try:
             transcript = await asyncio.to_thread(
-                YouTubeTranscriptApi().fetch, video_id, languages=self._preferred_langs
+                YouTubeTranscriptApi().fetch,
+                video_id,
+                languages=self._preferred_langs,
             )
-        except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable) as exc:
-            raise InvalidSourceError(f"No transcript available for '{raw}': {exc}") from exc
+        except (
+            TranscriptsDisabled,
+            NoTranscriptFound,
+            VideoUnavailable,
+        ) as exc:
+            raise InvalidSourceError(
+                f"No transcript available for '{raw}': {exc}"
+            ) from exc
         except Exception as exc:
-            raise InvalidSourceError(f"Could not extract transcript from '{raw}': {exc}") from exc
+            raise InvalidSourceError(
+                f"Could not extract transcript from '{raw}': {exc}"
+            ) from exc
 
         text = " ".join(snippet.text for snippet in transcript)
         if not text.strip():
@@ -42,5 +52,7 @@ class YoutubeExtractorAdapter(SourceExtractorPort):
     def _extract_video_id(self, raw: str) -> str:
         match = _ID_RE.search(raw)
         if not match:
-            raise InvalidSourceError(f"Could not parse a YouTube video id from '{raw}'.")
+            raise InvalidSourceError(
+                f"Could not parse a YouTube video id from '{raw}'."
+            )
         return match.group(1)

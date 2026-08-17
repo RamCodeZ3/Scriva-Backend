@@ -23,7 +23,9 @@ from application.ports.source_repository_port import SourceRepositoryPort
 class SupabaseDocumentRepository(DocumentRepositoryPort):
     _TABLE = "documents"
 
-    def __init__(self, client: Client, source_repository: SourceRepositoryPort) -> None:
+    def __init__(
+        self, client: Client, source_repository: SourceRepositoryPort
+    ) -> None:
         self._client = client
         self._sources = source_repository
 
@@ -37,25 +39,35 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
         return await self._to_entity(row)
 
     async def list_by_user(self, user_id: UUID) -> list[Document]:
-        rows = await asyncio.to_thread(self._list_rows_by_user_sync, str(user_id))
+        rows = await asyncio.to_thread(
+            self._list_rows_by_user_sync, str(user_id)
+        )
         return [await self._to_entity(row) for row in rows]
 
     async def delete(self, document_id: UUID) -> None:
         await asyncio.to_thread(self._delete_sync, str(document_id))
 
-    async def save_export_result(self, document_id: UUID, export_result: ExportResult) -> None:
+    async def save_export_result(
+        self, document_id: UUID, export_result: ExportResult
+    ) -> None:
         await asyncio.to_thread(
-            self._update_fields_sync, str(document_id), {"document_url": export_result.url}
+            self._update_fields_sync,
+            str(document_id),
+            {"document_url": export_result.url},
         )
 
-    async def get_export_result(self, document_id: UUID) -> ExportResult | None:
+    async def get_export_result(
+        self, document_id: UUID
+    ) -> ExportResult | None:
         row = await asyncio.to_thread(self._get_row_sync, str(document_id))
         if row is None or not row.get("document_url"):
             return None
         return ExportResult(url=row["document_url"])
 
     def _save_sync(self, document: Document) -> None:
-        self._client.table(self._TABLE).upsert(self._to_row(document)).execute()
+        self._client.table(self._TABLE).upsert(
+            self._to_row(document)
+        ).execute()
 
     def _get_row_sync(self, document_id: str) -> dict | None:
         result = (
@@ -68,14 +80,23 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
         return result.data if result and result.data else None
 
     def _list_rows_by_user_sync(self, user_id: str) -> list[dict]:
-        result = self._client.table(self._TABLE).select("*").eq("user_id", user_id).execute()
+        result = (
+            self._client.table(self._TABLE)
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
         return result.data or []
 
     def _delete_sync(self, document_id: str) -> None:
-        self._client.table(self._TABLE).delete().eq("id", document_id).execute()
+        self._client.table(self._TABLE).delete().eq(
+            "id", document_id
+        ).execute()
 
     def _update_fields_sync(self, document_id: str, fields: dict) -> None:
-        self._client.table(self._TABLE).update(fields).eq("id", document_id).execute()
+        self._client.table(self._TABLE).update(fields).eq(
+            "id", document_id
+        ).execute()
 
     def _to_row(self, document: Document) -> dict:
         return {
@@ -99,7 +120,9 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
         for sid in row.get("source_ids") or []:
             source = await self._sources.get_by_id(UUID(sid))
             if source is None:
-                raise ValueError(f"Document '{row['id']}' references a missing source '{sid}'.")
+                raise ValueError(
+                    f"Document '{row['id']}' references a missing source '{sid}'."
+                )
             raw_sources.append(source)
 
         return Document(

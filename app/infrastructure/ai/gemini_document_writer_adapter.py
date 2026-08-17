@@ -14,7 +14,7 @@ from domain.value_objects.source_ref import SourceReference
 
 from application.ports.document_writer_port import DocumentWriterPort
 
-_SUBHEADING_TOKEN="## "
+_SUBHEADING_TOKEN = "## "
 
 _SECTION_ORDER = [
     APASectionType.PRESENTATION,
@@ -92,7 +92,7 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     "needs to change.\n\n"
     f"{_FORMAT_RULES}\n"
     "7. For every section, decide: if the new material doesn't affect it, "
-    "return it with \"unchanged\": true and nothing else — do NOT repeat "
+    'return it with "unchanged": true and nothing else — do NOT repeat '
     "its old text, that wastes tokens. If it does, return the FULL updated "
     "'title' and 'content' for that section.\n"
     "8. If the new material is a genuinely new subtopic not covered yet in "
@@ -121,7 +121,9 @@ _URL_PATTERN = re.compile(r"https?://", re.IGNORECASE)
 
 
 class GeminiDocumentWriterAdapter(DocumentWriterPort):
-    def __init__(self, api_key: str, model_name: str = "gemini-3.5-flash") -> None:
+    def __init__(
+        self, api_key: str, model_name: str = "gemini-3.5-flash"
+    ) -> None:
         self._client = genai.Client(api_key=api_key)
         self._model_name = model_name
 
@@ -141,7 +143,9 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             presentation=presentation,
             additional_notes=additional_notes,
         )
-        raw_text = await self._generate(prompt, system_instruction=_SYSTEM_INSTRUCTION)
+        raw_text = await self._generate(
+            prompt, system_instruction=_SYSTEM_INSTRUCTION
+        )
         return self._parse_response(raw_text)
 
     async def augment(
@@ -162,8 +166,12 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             presentation=presentation,
             additional_notes=additional_notes,
         )
-        raw_text = await self._generate(prompt, system_instruction=_AUGMENT_SYSTEM_INSTRUCTION)
-        return self._parse_augment_response(raw_text, existing_sections=existing_sections)
+        raw_text = await self._generate(
+            prompt, system_instruction=_AUGMENT_SYSTEM_INSTRUCTION
+        )
+        return self._parse_augment_response(
+            raw_text, existing_sections=existing_sections
+        )
 
     async def _generate(self, prompt: str, *, system_instruction: str) -> str:
         try:
@@ -246,14 +254,23 @@ introduce a subtopic heading — used sparingly, and mostly inside "body".
         notes = _clean_notes(additional_notes)
         existing_sections_json = json.dumps(
             [
-                {"section_type": s.section_type.value, "title": s.title, "content": s.content}
+                {
+                    "section_type": s.section_type.value,
+                    "title": s.title,
+                    "content": s.content,
+                }
                 for s in existing_sections
             ],
             ensure_ascii=False,
         )
         existing_refs_json = json.dumps(
             [
-                {"author": r.author, "year": r.year, "title": r.title, "url": r.url}
+                {
+                    "author": r.author,
+                    "year": r.year,
+                    "title": r.title,
+                    "url": r.url,
+                }
                 for r in existing_references
             ],
             ensure_ascii=False,
@@ -311,13 +328,17 @@ de-duplicated list (old entries plus any genuinely new ones).
             sections = [
                 APASection(
                     section_type=APASectionType(s["section_type"]),
-                    title=self._validate_title(s["title"], field="section title"),
+                    title=self._validate_title(
+                        s["title"], field="section title"
+                    ),
                     content=s["content"],
                 )
                 for s in raw_sections
             ]
         except (KeyError, ValueError) as exc:
-            raise DocumentBuildError(f"Malformed section in Gemini response: {exc}") from exc
+            raise DocumentBuildError(
+                f"Malformed section in Gemini response: {exc}"
+            ) from exc
 
         references = self._parse_references(data)
         return title, sections, references
@@ -338,7 +359,9 @@ de-duplicated list (old entries plus any genuinely new ones).
             try:
                 section_type = APASectionType(s["section_type"])
             except (KeyError, ValueError) as exc:
-                raise DocumentBuildError(f"Malformed section in Gemini response: {exc}") from exc
+                raise DocumentBuildError(
+                    f"Malformed section in Gemini response: {exc}"
+                ) from exc
 
             if s.get("unchanged"):
                 existing = existing_by_type.get(section_type)
@@ -354,12 +377,16 @@ de-duplicated list (old entries plus any genuinely new ones).
                 sections.append(
                     APASection(
                         section_type=section_type,
-                        title=self._validate_title(s["title"], field="section title"),
+                        title=self._validate_title(
+                            s["title"], field="section title"
+                        ),
                         content=s["content"],
                     )
                 )
             except KeyError as exc:
-                raise DocumentBuildError(f"Malformed section in Gemini response: {exc}") from exc
+                raise DocumentBuildError(
+                    f"Malformed section in Gemini response: {exc}"
+                ) from exc
 
         references = self._parse_references(data)
         return title, sections, references
@@ -397,7 +424,11 @@ de-duplicated list (old entries plus any genuinely new ones).
 
 
 def _clean_notes(additional_notes: str | None) -> str:
-    return additional_notes.strip() if additional_notes and additional_notes.strip() else "None"
+    return (
+        additional_notes.strip()
+        if additional_notes and additional_notes.strip()
+        else "None"
+    )
 
 
 def _decode_json(raw_text: str) -> dict:
@@ -410,5 +441,7 @@ def _decode_json(raw_text: str) -> dict:
     try:
         data, _ = json.JSONDecoder().raw_decode(text)
     except json.JSONDecodeError as exc:
-        raise DocumentBuildError(f"Gemini did not return valid JSON: {exc}") from exc
+        raise DocumentBuildError(
+            f"Gemini did not return valid JSON: {exc}"
+        ) from exc
     return data

@@ -20,11 +20,11 @@ class SourceInput:
 
 
 class DocumentStatus(Enum):
-    PENDING    = "pending"
+    PENDING = "pending"
     EXTRACTING = "extracting"
     GENERATING = "generating"
-    DONE       = "done"
-    FAILED     = "failed"
+    DONE = "done"
+    FAILED = "failed"
 
 
 @dataclass
@@ -83,12 +83,17 @@ class Document:
         self._touch()
 
     def complete(
-        self, title: str, sections: list[APASection], sources: list[SourceReference]
+        self,
+        title: str,
+        sections: list[APASection],
+        sources: list[SourceReference],
     ) -> None:
         self._assert_status(DocumentStatus.GENERATING)
 
         if not sections:
-            raise DocumentBuildError("A document must have at least one section.")
+            raise DocumentBuildError(
+                "A document must have at least one section."
+            )
 
         required = {
             APASectionType.PRESENTATION,
@@ -118,7 +123,9 @@ class Document:
         if title is not None:
             self.title = title
         if sections is not None:
-            self.sections = sorted(sections, key=lambda s: s.section_type.order)
+            self.sections = sorted(
+                sections, key=lambda s: s.section_type.order
+            )
         if presentation is not None:
             self.presentation = presentation
         self._touch()
@@ -150,7 +157,9 @@ class Document:
         return self.status == DocumentStatus.DONE
 
     def get_section(self, section_type: APASectionType) -> APASection | None:
-        return next((s for s in self.sections if s.section_type == section_type), None)
+        return next(
+            (s for s in self.sections if s.section_type == section_type), None
+        )
 
     def _assert_status(self, expected: DocumentStatus) -> None:
         if self.status != expected:

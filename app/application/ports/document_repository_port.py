@@ -24,9 +24,13 @@ class DocumentRepositoryPort(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def save_export_result(self, document_id: UUID, export_result: ExportResult) -> None:
+    async def save_export_result(
+        self, document_id: UUID, export_result: ExportResult
+    ) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    async def get_export_result(self, document_id: UUID) -> ExportResult | None:
+    async def get_export_result(
+        self, document_id: UUID
+    ) -> ExportResult | None:
         raise NotImplementedError

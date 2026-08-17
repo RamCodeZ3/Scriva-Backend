@@ -13,14 +13,12 @@ class User:
     created_at: datetime
     updated_at: datetime
 
-    # ── Factory Method ────────────────────────────────────────────────────────
-
     @classmethod
     def create(cls, email: str, name: str) -> "User":
         email_clean = email.strip().lower()
         if not email_clean or "@" not in email_clean:
             raise UserDomainError("The email address provided is invalid.")
-        
+
         name_clean = name.strip()
         if not name_clean:
             raise UserDomainError("The username cannot be left blank.")
@@ -35,16 +33,12 @@ class User:
             updated_at=now,
         )
 
-    # ── Domain Business Actions ───────────────────────────────────────────────
-
     def update_profile(self, name: str) -> None:
         name_clean = name.strip()
         if not name_clean:
             raise UserDomainError("The username cannot be left blank.")
         self.name = name_clean
         self._touch()
-
-    # ── Private Helpers ───────────────────────────────────────────────────────
 
     def _touch(self) -> None:
         self.updated_at = datetime.utcnow()

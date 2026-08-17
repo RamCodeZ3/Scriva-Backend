@@ -10,12 +10,6 @@ from domain.entities.source import SourceStatus
 
 
 class ProcessDocumentUseCase:
-    """
-    Extracts every source and sends the combined text to Gemini for the
-    APA draft. Export is decoupled from this flow — it becomes its own
-    step/endpoint once that's built.
-    """
-
     def __init__(
         self,
         document_repository: DocumentRepositoryPort,
@@ -31,13 +25,17 @@ class ProcessDocumentUseCase:
     async def execute(self, document_id: UUID) -> None:
         document = await self._documents.get_by_id(document_id)
         if document is None:
-            raise DocumentNotFoundError(f"Document '{document_id}' does not exist.")
+            raise DocumentNotFoundError(
+                f"Document '{document_id}' does not exist."
+            )
 
         sources = []
         for raw_source in document.raw_sources:
             source = await self._sources.get_by_id(raw_source.id)
             if source is None:
-                raise SourceNotFoundError(f"Source '{raw_source.id}' does not exist.")
+                raise SourceNotFoundError(
+                    f"Source '{raw_source.id}' does not exist."
+                )
             sources.append(source)
 
         try:
@@ -45,13 +43,16 @@ class ProcessDocumentUseCase:
             await self._documents.save(document)
 
             for source in sources:
-                extractor = self._extractor_factory.get_extractor(source.source_type)
+                extractor = self._extractor_factory.get_extractor(
+                    source.source_type
+                )
                 content = await extractor.extract(source.raw)
                 source.mark_extracted(content)
                 await self._sources.save(source)
 
             combined_content = "\n\n".join(
-                f"[Fuente {i + 1}]\n{s.get_content()}" for i, s in enumerate(sources)
+                f"[Fuente {i + 1}]\n{s.get_content()}"
+                for i, s in enumerate(sources)
             )
 
             document.start_generation()
@@ -64,7 +65,9 @@ class ProcessDocumentUseCase:
                 presentation=document.presentation,
                 additional_notes=document.additional_notes,
             )
-            document.complete(title=title, sections=sections, sources=references)
+            document.complete(
+                title=title, sections=sections, sources=references
+            )
             await self._documents.save(document)
 
         except Exception as exc:

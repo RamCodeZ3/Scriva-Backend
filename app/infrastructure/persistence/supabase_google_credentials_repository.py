@@ -10,20 +10,6 @@ from application.ports.google_credentials_port import GoogleCredentialsPort
 
 
 class SupabaseGoogleCredentialsRepository(GoogleCredentialsPort):
-    """
-    Read-only adapter over the `google_credentials` table:
-      user_id uuid pk/fk -> users.id, encrypted_refresh_token text,
-      scopes text, created_at, updated_at
-
-    That row is written by the other backend (the one that runs the
-    Google OAuth consent flow tied to Supabase). This adapter only
-    reads and decrypts it — never writes.
-
-    `encryption_key` MUST be the exact same Fernet key the writing
-    service used to encrypt (shared via a secret manager, not copied
-    by hand), or decryption will fail for every user.
-    """
-
     _TABLE = "google_credentials"
 
     def __init__(self, client: Client, encryption_key: str) -> None:
@@ -36,7 +22,9 @@ class SupabaseGoogleCredentialsRepository(GoogleCredentialsPort):
             return None
 
         try:
-            return self._fernet.decrypt(row["encrypted_refresh_token"].encode()).decode()
+            return self._fernet.decrypt(
+                row["encrypted_refresh_token"].encode()
+            ).decode()
         except InvalidToken as exc:
             raise ValueError(
                 f"Could not decrypt Google credentials for user '{user_id}': "

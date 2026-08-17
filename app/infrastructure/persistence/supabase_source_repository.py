@@ -55,7 +55,9 @@ class SupabaseSourceRepository(SourceRepositoryPort):
             source_type=SourceType(row["type"]),
             raw=row["raw"],
             status=SourceStatus(row["status"]),
-            file_kind=FileKind(row["file_kind"]) if row.get("file_kind") else None,
+            file_kind=FileKind(row["file_kind"])
+            if row.get("file_kind")
+            else None,
             content=row.get("content"),
             char_count=row.get("char_count"),
             error_message=row.get("error_message"),

@@ -1,6 +1,9 @@
 from uuid import UUID
 
-from application.exceptions import DocumentAccessDeniedError, DocumentNotFoundError
+from application.exceptions import (
+    DocumentAccessDeniedError,
+    DocumentNotFoundError,
+)
 from application.ports.document_repository_port import DocumentRepositoryPort
 
 
@@ -11,7 +14,9 @@ class DeleteDocumentUseCase:
     async def execute(self, document_id: UUID, user_id: UUID) -> None:
         document = await self._documents.get_by_id(document_id)
         if document is None:
-            raise DocumentNotFoundError(f"Document '{document_id}' does not exist.")
+            raise DocumentNotFoundError(
+                f"Document '{document_id}' does not exist."
+            )
         if document.user_id != user_id:
             raise DocumentAccessDeniedError(
                 f"Document '{document_id}' does not belong to this account."
