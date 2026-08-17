@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,10 +10,16 @@ from domain.value_objects.apa_structure import APASection, APASectionType
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 
-from application.dtos.document_dtos import AugmentDocumentInput, CreateDocumentInput, UpdateDocumentInput
+from application.dtos.document_dtos import (
+    AugmentDocumentInput,
+    CreateDocumentInput,
+    ExportDocumentInput,
+    UpdateDocumentInput,
+)
 from application.use_cases.augment_document_use_case import AugmentDocumentUseCase
 from application.use_cases.create_document_use_case import CreateDocumentUseCase
 from application.use_cases.delete_document_use_case import DeleteDocumentUseCase
+from application.use_cases.export_document_use_case import ExportDocumentUseCase
 from application.use_cases.get_document_use_case import GetDocumentUseCase
 from application.use_cases.update_document_use_case import UpdateDocumentUseCase
 
@@ -21,6 +28,7 @@ from api.deps import (
     get_create_document_use_case,
     get_current_user,
     get_delete_document_use_case,
+    get_export_document_use_case,
     get_get_document_use_case,
     get_update_document_use_case,
 )
@@ -32,6 +40,8 @@ from api.schemas.documents import (
     DocumentGetResponse,
     DocumentPatchResponse,
     DocumentSectionOut,
+    ExportDocumentRequest,
+    ExportDocumentResponse,
     PresentationOut,
     UpdateDocumentRequest,
 )
@@ -79,6 +89,36 @@ async def create_document(
         document_title=result.document_title,
         document_sections=_sections_out(result.sections),
         error_message=result.error_message,
+    )
+
+
+@router.post("/export/", response_model=ExportDocumentResponse)
+async def export_document(
+    body: ExportDocumentRequest,
+    current_user: User = Depends(get_current_user),
+    use_case: ExportDocumentUseCase = Depends(get_export_document_use_case),
+) -> ExportDocumentResponse:
+    try:
+        document_id = UUID(body.document_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid document_id '{body.document_id}': {exc}",
+        ) from exc
+
+    data = ExportDocumentInput(document_id=document_id, user_id=current_user.id, export=body.export)
+    result = await use_case.execute(data)
+
+    return ExportDocumentResponse(
+        status="exported",
+        document_id=body.document_id,
+        export=body.export,
+        url=result.url,
+        file_base64=(
+            base64.b64encode(result.file_bytes).decode("ascii") if result.file_bytes else None
+        ),
+        file_name=result.file_name,
+        content_type=result.content_type,
     )
 
 

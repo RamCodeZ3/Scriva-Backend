@@ -11,27 +11,6 @@ class InvalidTokenError(Exception):
 
 
 class SupabaseJWTAuth:
-    """
-    Verifies a Supabase Auth JWT.
-
-    Supabase now signs access tokens with asymmetric JWT Signing Keys
-    (ES256/RSA) by default, verifiable locally against the project's
-    public JWKS — no shared secret involved. `PyJWKClient` fetches and
-    caches those public keys, matching the right one via the token's
-    `kid` header.
-
-    Two things Supabase's docs don't make obvious:
-      - The JWKS endpoint is `/auth/v1/.well-known/jwks.json`, not
-        `/auth/v1/jwks`.
-      - Every `/auth/v1/*` route, including the JWKS one, requires the
-        project's `apikey` header (anon/publishable key) or it 401s
-        before it even looks at what you asked for.
-
-    If your project hasn't migrated off the legacy shared HS256 secret
-    yet (or is mid-migration and can still issue legacy tokens), pass
-    `legacy_secret` too — both old and new tokens verify correctly
-    during the transition.
-    """
 
     def __init__(
         self,
