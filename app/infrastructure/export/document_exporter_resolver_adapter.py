@@ -1,0 +1,62 @@
+from __future__ import annotations
+
+from uuid import UUID
+
+from application.ports.document_exporter_port import DocumentExporterPort
+from application.ports.document_exporter_resolver_port import (
+    DocumentExporterResolverPort,
+    UnsupportedExportTargetError,
+)
+from application.ports.google_credentials_port import GoogleCredentialsPort
+
+from infrastructure.auth.google_oauth_token_provider import (
+    GoogleOAuthTokenProvider,
+)
+from infrastructure.export.google_docs_exporter_adapter import (
+    GoogleDocsExporterAdapter,
+)
+from infrastructure.export.pdf_document_exporter_adapter import (
+    PdfDocumentExporterAdapter,
+)
+
+
+class DocumentExporterResolverAdapter(DocumentExporterResolverPort):
+    def __init__(
+        self,
+        pdf_exporter: PdfDocumentExporterAdapter,
+        google_credentials_repository: GoogleCredentialsPort,
+        google_token_provider: GoogleOAuthTokenProvider,
+    ) -> None:
+        self._pdf_exporter = pdf_exporter
+        self._google_credentials_repository = google_credentials_repository
+        self._google_token_provider = google_token_provider
+
+    async def resolve(
+        self, export_target: str, user_id: UUID
+    ) -> DocumentExporterPort:
+        if export_target == "pdf":
+            return self._pdf_exporter
+
+        if export_target == "google_doc":
+            refresh_token = (
+                await self._google_credentials_repository.get_refresh_token(
+                    user_id
+                )
+            )
+            if refresh_token is None:
+                raise UnsupportedExportTargetError(
+                    "This account hasn't granted Google Docs/Drive access yet."
+                )
+            access_token = await self._google_token_provider.get_access_token(
+                refresh_token
+            )
+            return GoogleDocsExporterAdapter(user_access_token=access_token)
+
+        if export_target == "docx":
+            raise UnsupportedExportTargetError(
+                "docx export isn't implemented yet."
+            )
+
+        raise UnsupportedExportTargetError(
+            f"Unknown export target '{export_target}'."
+        )

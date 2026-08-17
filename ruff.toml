@@ -6,15 +6,22 @@ select = ["E", "W", "F", "I", "UP"]
 
 [lint.isort]
 known-first-party = [
-  "domain",
-  "aplication",
-  "infrastructure",
+  "app.domain",
+  "app.application",
+  "app.infrastructure",
+  "app.api",
 ]
-known-third-party = ["playwright"]
+known-third-party = [
+  "playwright",
+  "genai",
+  "fastapi",
+  "google",
+  "jwt",
+]
 section-order = [
-    "future",
-    "standard-library",
-    "third-party",
-    "first-party",
-    "local-folder"
+  "future",
+  "standard-library",
+  "third-party",
+  "first-party",
+  "local-folder"
 ]
