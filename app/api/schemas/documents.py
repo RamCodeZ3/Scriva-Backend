@@ -75,3 +75,18 @@ class DeleteDocumentResponse(BaseModel):
 class AugmentDocumentRequest(BaseModel):
     sources: list[str] = Field(..., min_length=1)
     additional_notes: str | None = None
+
+
+class ExportDocumentRequest(BaseModel):
+    document_id: str
+    export: str
+
+
+class ExportDocumentResponse(BaseModel):
+    status: str
+    document_id: str
+    export: str
+    url: str | None = None
+    file_base64: str | None = None
+    file_name: str | None = None
+    content_type: str | None = None

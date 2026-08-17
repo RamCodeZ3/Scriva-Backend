@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from datetime import date
 from io import BytesIO
@@ -25,9 +24,7 @@ _LEADING = 24
 
 
 class PdfDocumentExporterAdapter(DocumentExporterPort):
-    def __init__(self, storage_dir: str = "storage/documents") -> None:
-        self._storage_dir = storage_dir
-        os.makedirs(self._storage_dir, exist_ok=True)
+    def __init__(self) -> None:
         self._styles = _build_styles()
 
     async def export(self, document: Document) -> ExportResult:
@@ -36,16 +33,11 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         except Exception as exc:
             raise DocumentBuildError(f"PDF export failed: {exc}") from exc
 
-        file_name = f"{_safe_filename(document.title)}.pdf"
-        storage_path = os.path.join(self._storage_dir, f"{document.id}.pdf")
-        await asyncio.to_thread(_write_file, storage_path, pdf_bytes)
-
         return ExportResult(
             url=None,
             file_bytes=pdf_bytes,
-            file_name=file_name,
+            file_name=f"{_safe_filename(document.title)}.pdf",
             content_type="application/pdf",
-            storage_path=storage_path,
         )
 
     def _build_sync(self, document: Document) -> bytes:
@@ -162,8 +154,3 @@ def _safe_filename(title: str) -> str:
     cleaned = re.sub(r"[^\w\-. ]", "", title).strip()
     cleaned = re.sub(r"\s+", "_", cleaned)
     return cleaned[:80] or "document"
-
-
-def _write_file(path: str, data: bytes) -> None:
-    with open(path, "wb") as f:
-        f.write(data)

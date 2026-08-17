@@ -21,6 +21,7 @@ from application.ports.user_repository_port import UserRepositoryPort
 from application.use_cases.augment_document_use_case import AugmentDocumentUseCase
 from application.use_cases.create_document_use_case import CreateDocumentUseCase
 from application.use_cases.delete_document_use_case import DeleteDocumentUseCase
+from application.use_cases.export_document_use_case import ExportDocumentUseCase
 from application.use_cases.get_document_use_case import GetDocumentUseCase
 from application.use_cases.process_document_use_case import ProcessDocumentUseCase
 from application.use_cases.update_document_use_case import UpdateDocumentUseCase
@@ -103,16 +104,11 @@ def get_google_oauth_token_provider() -> GoogleOAuthTokenProvider:
 
 @lru_cache
 def get_pdf_document_exporter() -> PdfDocumentExporterAdapter:
-    # Not wired into document creation anymore — kept for the future,
-    # standalone export endpoint.
-    storage_dir = os.environ.get("PDF_STORAGE_DIR", "storage/documents")
-    return PdfDocumentExporterAdapter(storage_dir=storage_dir)
+    return PdfDocumentExporterAdapter()
 
 
 @lru_cache
 def get_document_exporter_resolver() -> DocumentExporterResolverPort:
-    # Not wired into document creation anymore — kept for the future,
-    # standalone export endpoint.
     return DocumentExporterResolverAdapter(
         pdf_exporter=get_pdf_document_exporter(),
         google_credentials_repository=get_google_credentials_repository(),
@@ -243,4 +239,14 @@ def get_augment_document_use_case(
         source_repository=source_repository,
         extractor_factory=extractor_factory,
         document_writer=document_writer,
+    )
+
+
+def get_export_document_use_case(
+    document_repository: DocumentRepositoryPort = Depends(get_document_repository),
+    exporter_resolver: DocumentExporterResolverPort = Depends(get_document_exporter_resolver),
+) -> ExportDocumentUseCase:
+    return ExportDocumentUseCase(
+        document_repository=document_repository,
+        exporter_resolver=exporter_resolver,
     )

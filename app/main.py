@@ -14,6 +14,7 @@ from application.exceptions import (
     UserAlreadyExistsError,
     UserNotFoundError,
 )
+from application.ports.document_exporter_resolver_port import UnsupportedExportTargetError
 from domain.exceptions import DocumentBuildError, InvalidSourceError
 
 from api.v1.documents import router as documents_router
@@ -54,6 +55,13 @@ async def document_build_error_handler(request: Request, exc: DocumentBuildError
 
 @app.exception_handler(InvalidSourceError)
 async def invalid_source_error_handler(request: Request, exc: InvalidSourceError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(UnsupportedExportTargetError)
+async def unsupported_export_target_handler(
+    request: Request, exc: UnsupportedExportTargetError
+) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 

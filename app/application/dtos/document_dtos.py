@@ -64,6 +64,13 @@ class AugmentDocumentInput:
 
 
 @dataclass(frozen=True)
+class ExportDocumentInput:
+    document_id: UUID
+    user_id: UUID
+    export: str
+
+
+@dataclass(frozen=True)
 class DocumentStatusOutput:
     document_id: UUID
     status: DocumentStatus

@@ -45,11 +45,6 @@ class GoogleDocsExporterAdapter(DocumentExporterPort):
         return f"https://docs.google.com/document/d/{document_id}/edit"
 
     def _build_requests(self, document: Document) -> list[dict]:
-        """
-        Google Docs' batchUpdate always inserts at a fixed index, so
-        sections are written back-to-front (last section first) to end
-        up in the right reading order at index 1.
-        """
         requests: list[dict] = []
         for section in reversed(document.sections):
             body_text = f"{section.content}\n\n"
