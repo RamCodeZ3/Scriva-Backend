@@ -1,4 +1,4 @@
-# AI Document Generator
+# Scriva
 
 An intelligent service that ingests one or more information sources — web pages, YouTube videos, plain text, or uploaded files — and uses AI to automatically draft a complete, publication-ready document (title page, table of contents, introduction, body, conclusion, and references) formatted according to **APA 7th edition**.
 
