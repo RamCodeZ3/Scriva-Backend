@@ -90,3 +90,9 @@ class ExportDocumentResponse(BaseModel):
     file_base64: str | None = None
     file_name: str | None = None
     content_type: str | None = None
+
+
+class DocumentReferenceResponse(BaseModel):
+    id: str
+    title: str
+    updated_at: str

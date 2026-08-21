@@ -32,6 +32,10 @@ from application.use_cases.get_document_use_case import GetDocumentUseCase
 from application.use_cases.update_document_use_case import (
     UpdateDocumentUseCase,
 )
+from application.use_cases.list_user_documents_use_case import (
+    ListUserDocumentsUseCase,
+)
+from application.exceptions import UserNotFoundError
 
 from api.deps import (
     get_augment_document_use_case,
@@ -41,6 +45,7 @@ from api.deps import (
     get_export_document_use_case,
     get_get_document_use_case,
     get_update_document_use_case,
+    get_list_user_documents_use_case,
 )
 from api.schemas.documents import (
     AugmentDocumentRequest,
@@ -54,6 +59,7 @@ from api.schemas.documents import (
     ExportDocumentResponse,
     PresentationOut,
     UpdateDocumentRequest,
+    DocumentReferenceResponse,
 )
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
@@ -243,6 +249,38 @@ async def update_document(
         source_ids=[str(sid) for sid in result.source_ids],
         updated_at=result.updated_at.isoformat(),
     )
+
+
+@router.get("/list/{user_id}", response_model=list[DocumentReferenceResponse])
+async def get_list_by_user_id(
+    user_id: UUID,
+    current_user: User = Depends(get_current_user),
+    use_case: ListUserDocumentsUseCase = Depends(
+        get_list_user_documents_use_case
+    ),
+) -> list[DocumentReferenceResponse]:
+    if current_user.id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: You cannot access other users' documents.",
+        )
+
+    try:
+        results = await use_case.execute(user_id)
+    except UserNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    return [
+        DocumentReferenceResponse(
+            id=str(doc.id),
+            title=doc.title,
+            updated_at=doc.updated_at.isoformat(),
+        )
+        for doc in results
+    ]
 
 
 @router.delete("/{document_id}", response_model=DeleteDocumentResponse)
