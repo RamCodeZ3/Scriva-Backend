@@ -16,6 +16,7 @@ from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
 
 from application.dtos.export_result import ExportResult
+from application.dtos.document_dtos import DocumentReference
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.source_repository_port import SourceRepositoryPort
 
@@ -38,11 +39,11 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             return None
         return await self._to_entity(row)
 
-    async def list_by_user(self, user_id: UUID) -> list[Document]:
+    async def list_by_user(self, user_id: UUID) -> list[DocumentReference]:
         rows = await asyncio.to_thread(
             self._list_rows_by_user_sync, str(user_id)
         )
-        return [await self._to_entity(row) for row in rows]
+        return [await self._to_document_reference(row) for row in rows]
 
     async def delete(self, document_id: UUID) -> None:
         await asyncio.to_thread(self._delete_sync, str(document_id))
@@ -82,7 +83,7 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
     def _list_rows_by_user_sync(self, user_id: str) -> list[dict]:
         result = (
             self._client.table(self._TABLE)
-            .select("*")
+            .select("id, title, updated_at")
             .eq("user_id", user_id)
             .execute()
         )
@@ -139,6 +140,13 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             updated_at=datetime.fromisoformat(row["updated_at"]),
             error_message=row.get("error_message"),
             additional_notes=row.get("additional_notes"),
+        )
+
+    async def _to_document_reference(self, row: dict) -> DocumentReference:
+        return DocumentReference(
+            id=UUID(row["id"]),
+            title=row["title"],
+            updated_at=datetime.fromisoformat(row["updated_at"]),
         )
 
 

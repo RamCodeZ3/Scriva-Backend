@@ -85,3 +85,10 @@ class DocumentDetailOutput:
     export_url: str | None
     sections: list[APASection]
     sources: list[SourceReference]
+
+
+@dataclass(frozen=True)
+class DocumentReference:
+    id: UUID
+    title: str
+    updated_at: datetime

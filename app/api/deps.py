@@ -39,6 +39,9 @@ from application.use_cases.process_document_use_case import (
 from application.use_cases.update_document_use_case import (
     UpdateDocumentUseCase,
 )
+from application.use_cases.list_user_documents_use_case import (
+    ListUserDocumentsUseCase,
+)
 
 from infrastructure.ai.gemini_document_writer_adapter import (
     GeminiDocumentWriterAdapter,
@@ -313,4 +316,16 @@ def get_export_document_use_case(
     return ExportDocumentUseCase(
         document_repository=document_repository,
         exporter_resolver=exporter_resolver,
+    )
+
+
+def get_list_user_documents_use_case(
+    document_repository: DocumentRepositoryPort = Depends(
+        get_document_repository
+    ),
+    user_repository: UserRepositoryPort = Depends(get_user_repository),
+) -> ListUserDocumentsUseCase:
+    return ListUserDocumentsUseCase(
+        document_repository=document_repository,
+        user_repository=user_repository,
     )
