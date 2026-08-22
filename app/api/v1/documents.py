@@ -6,7 +6,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from domain.entities.user import User
-from domain.value_objects.apa_structure import APASection, APASectionType
+from domain.value_objects.apa_structure import (
+    APA7_DOCUMENT_STYLES,
+    APASection,
+    APASectionType,
+)
+from domain.value_objects.document_node import HEADING_1, DocumentNode
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 
@@ -53,8 +58,10 @@ from api.schemas.documents import (
     CreateDocumentResponse,
     DeleteDocumentResponse,
     DocumentGetResponse,
+    DocumentMetaOut,
+    DocumentNodeOut,
     DocumentPatchResponse,
-    DocumentSectionOut,
+    DocumentStylesOut,
     ExportDocumentRequest,
     ExportDocumentResponse,
     PresentationOut,
@@ -103,7 +110,9 @@ async def create_document(
         document_id=str(result.document_id),
         document_type=result.document_type.value,
         document_title=result.document_title,
-        document_sections=_sections_out(result.sections),
+        meta=DocumentMetaOut(title=result.document_title),
+        document_styles=_styles_out(result),
+        document_nodes=_nodes_out(result.sections),
         error_message=result.error_message,
     )
 
@@ -155,7 +164,9 @@ async def get_document(
         title=result.title,
         document_type=result.document_type.value,
         status=result.status.value,
-        sections=_sections_out(result.sections),
+        meta=DocumentMetaOut(title=result.title),
+        document_styles=_styles_out(result),
+        document_nodes=_nodes_out(result.sections),
         user_id=str(result.user_id),
         presentation=_presentation_out(result.presentation),
         error_message=result.error_message,
@@ -185,7 +196,9 @@ async def augment_document(
         title=result.title,
         document_type=result.document_type.value,
         status=result.status.value,
-        sections=_sections_out(result.sections),
+        meta=DocumentMetaOut(title=result.title),
+        document_styles=_styles_out(result),
+        document_nodes=_nodes_out(result.sections),
         user_id=str(result.user_id),
         presentation=_presentation_out(result.presentation),
         error_message=result.error_message,
@@ -203,20 +216,13 @@ async def update_document(
     use_case: UpdateDocumentUseCase = Depends(get_update_document_use_case),
 ) -> DocumentPatchResponse:
     sections = None
-    if body.sections is not None:
+    if body.document_nodes is not None:
         try:
-            sections = [
-                APASection(
-                    section_type=APASectionType(s.section_type),
-                    title=s.title,
-                    content=s.content,
-                )
-                for s in body.sections
-            ]
+            sections = _sections_from_nodes(body.document_nodes)
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid section_type in sections: {exc}",
+                detail=f"Invalid document_nodes: {exc}",
             ) from exc
 
     presentation = None
@@ -242,7 +248,7 @@ async def update_document(
         id=str(result.id),
         title=result.title,
         document_type=result.document_type.value,
-        sections=_sections_out(result.sections),
+        document_nodes=_nodes_out(result.sections),
         user_id=str(result.user_id),
         presentation=_presentation_out(result.presentation),
         error_message=result.error_message,
@@ -302,13 +308,11 @@ def _title_snippet(body: CreateDocumentRequest) -> str:
     return first.splitlines()[0][:80]
 
 
-def _sections_out(sections) -> list[DocumentSectionOut]:
-    return [
-        DocumentSectionOut(
-            section_type=s.section_type.value, title=s.title, content=s.content
-        )
-        for s in sections
-    ]
+def _styles_out(result) -> DocumentStylesOut:
+    # `result` is whatever DTO the use case returns; if it doesn't carry
+    # `document_styles` yet, fall back to the fixed APA7 defaults.
+    styles = getattr(result, "document_styles", None) or APA7_DOCUMENT_STYLES
+    return DocumentStylesOut(**styles)
 
 
 def _presentation_out(p: PresentationInfo) -> PresentationOut:
@@ -319,3 +323,89 @@ def _presentation_out(p: PresentationInfo) -> PresentationOut:
         student_id=p.student_id,
         institution=p.institution,
     )
+
+
+# --- node tree <-> APASection conversion -----------------------------------
+#
+# `result.sections` (a list[APASection]) is the domain's grouped view; the
+# API instead speaks a flat, ordered list of DocumentNodeOut (one heading-1
+# node per section, immediately followed by that section's body nodes) —
+# exactly the shape Document.to_node_tree()["children"] produces.
+
+
+def _node_out(node: DocumentNode) -> DocumentNodeOut:
+    if node.text is not None:
+        return DocumentNodeOut(
+            text=node.text, marks=list(node.marks) if node.marks else None
+        )
+    return DocumentNodeOut(
+        id=node.id,
+        type=node.type,
+        section_type=node.section_type,
+        children=[_node_out(c) for c in node.children],
+    )
+
+
+def _nodes_out(sections: list[APASection]) -> list[DocumentNodeOut]:
+    flat: list[DocumentNode] = []
+    for section in sections:
+        flat.append(section.heading)
+        flat.extend(section.body_nodes)
+    return [_node_out(n) for n in flat]
+
+
+def _node_from_out(node: DocumentNodeOut) -> DocumentNode:
+    if node.text is not None:
+        return DocumentNode(text=node.text, marks=tuple(node.marks or ()))
+    return DocumentNode(
+        type=node.type,
+        id=node.id,
+        section_type=node.section_type,
+        children=tuple(_node_from_out(c) for c in (node.children or ())),
+    )
+
+
+def _sections_from_nodes(nodes: list[DocumentNodeOut]) -> list[APASection]:
+    """Regroup a flat, ordered node list back into APASections: each
+    'heading-1' node starts a new section, everything after it (until the
+    next heading-1) is that section's body."""
+    heading: DocumentNode | None = None
+    section_type: APASectionType | None = None
+    body: list[DocumentNode] = []
+    sections: list[APASection] = []
+
+    def _flush() -> None:
+        if heading is not None:
+            sections.append(
+                APASection(
+                    section_type=section_type,
+                    heading=heading,
+                    body_nodes=tuple(body),
+                )
+            )
+
+    for out_node in nodes:
+        node = _node_from_out(out_node)
+        if node.type == HEADING_1:
+            _flush()
+            heading = node
+            body = []
+            if node.section_type is None:
+                raise ValueError(
+                    "A 'heading-1' node is missing its 'section_type'."
+                )
+            try:
+                section_type = APASectionType(node.section_type)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Unknown section_type: {node.section_type!r}"
+                ) from exc
+        else:
+            if heading is None:
+                raise ValueError(
+                    "document_nodes must start with a 'heading-1' node."
+                )
+            body.append(node)
+
+    _flush()
+    return sections

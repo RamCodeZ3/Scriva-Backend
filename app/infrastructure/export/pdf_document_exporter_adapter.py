@@ -23,6 +23,13 @@ from reportlab.platypus.tableofcontents import TableOfContents
 from domain.entities.document import Document
 from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import APASectionType
+from domain.value_objects.document_node import (
+    BULLETED_LIST,
+    HEADING_2,
+    NUMBERED_LIST,
+    PARAGRAPH,
+    DocumentNode,
+)
 
 from application.dtos.export_result import ExportResult
 from application.ports.document_exporter_port import DocumentExporterPort
@@ -30,12 +37,6 @@ from application.ports.document_exporter_port import DocumentExporterPort
 _PAGE_SIZE = letter
 _MARGIN = inch
 _LEADING = 24
-
-_BULLET_RE = re.compile(r"^[-*]\s+(.*)$")
-_NUMBERED_RE = re.compile(r"^\d+[.)]\s+(.*)$")
-_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
-_UNDERLINE_RE = re.compile(r"__(.+?)__")
-SUBHEADING_TOKEN = "## "
 
 
 class _ApaDocTemplate(BaseDocTemplate):
@@ -91,7 +92,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         story: list = []
         story += self._build_cover_page(document)
         story.append(PageBreak())
-        story += self._build_toc_page()
+        story += self._build_toc_page(document)
         story.append(PageBreak())
 
         for section_type in (
@@ -110,6 +111,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         return buffer.getvalue()
 
     def _build_cover_page(self, document: Document) -> list:
+        
         p = document.presentation
         styles = self._styles
 
@@ -133,7 +135,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         ]
         return elements
 
-    def _build_toc_page(self) -> list:
+    def _build_toc_page(self, document: Document) -> list:
         toc = TableOfContents()
         toc.levelStyles = [
             self._styles["TOCLevel0"],
@@ -142,9 +144,14 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         toc.dotsMinLevel = (
             0  # dot leaders on every level, not just sub-entries
         )
+        index_section = document.get_section(APASectionType.INDEX)
+        index_title = index_section.title if index_section else "Índice"
         # "Heading1Plain" is intentionally NOT the "Heading1" style, so this
         # heading doesn't register itself as a TOC entry.
-        return [Paragraph("Índice", self._styles["Heading1Plain"]), toc]
+        return [
+            Paragraph(_xml_escape(index_title), self._styles["Heading1Plain"]),
+            toc,
+        ]
 
     def _build_section(
         self, document: Document, section_type: APASectionType
@@ -154,11 +161,10 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
             return []
 
         elements: list = [
-            Paragraph(
-                _inline_markdown(section.title), self._styles["Heading1"]
-            )
+            Paragraph(_xml_escape(section.title), self._styles["Heading1"])
         ]
-        elements += _render_section_content(section.content, self._styles)
+        for node in section.body_nodes:
+            elements += _render_block(node, self._styles)
         return elements
 
     def _build_references(self, document: Document) -> list:
@@ -168,7 +174,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         ):
             elements.append(
                 Paragraph(
-                    _inline_markdown(ref.to_apa_string()),
+                    _xml_escape(ref.to_apa_string()),
                     self._styles["Reference"],
                 )
             )
@@ -292,79 +298,46 @@ def _draw_page_number(canvas, doc) -> None:
     canvas.restoreState()
 
 
-def _inline_markdown(text: str) -> str:
-    escaped = _xml_escape(text)
-    escaped = _BOLD_RE.sub(lambda m: f"<b>{m.group(1)}</b>", escaped)
-    escaped = _UNDERLINE_RE.sub(lambda m: f"<u>{m.group(1)}</u>", escaped)
-    return escaped
-
-
-def _render_section_content(content: str, styles: dict) -> list:
-
-    elements: list = []
-    lines = content.split("\n")
-    buffer: list[str] = []
-    i = 0
-
-    def flush() -> None:
-        if not buffer:
-            return
-        text = " ".join(s.strip() for s in buffer if s.strip())
-        buffer.clear()
-        if text:
-            elements.append(Paragraph(_inline_markdown(text), styles["Body"]))
-
-    while i < len(lines):
-        line = lines[i].strip()
-
-        if not line:
-            flush()
-            i += 1
-            continue
-
-        if line.startswith(SUBHEADING_TOKEN):
-            flush()
-            heading = line[len(SUBHEADING_TOKEN) :].strip()
-            elements.append(
-                Paragraph(_inline_markdown(heading), styles["Heading2"])
+def _render_inline(nodes: tuple[DocumentNode, ...]) -> str:
+    """Render a sequence of leaf text nodes into ReportLab mini-markup,
+    honoring 'bold'/'underline' marks."""
+    parts: list[str] = []
+    for node in nodes:
+        if node.text is None:
+            raise DocumentBuildError(
+                f"Expected a leaf text node, got block '{node.type}'."
             )
-            i += 1
-            continue
+        chunk = _xml_escape(node.text)
+        if "bold" in node.marks:
+            chunk = f"<b>{chunk}</b>"
+        if "underline" in node.marks:
+            chunk = f"<u>{chunk}</u>"
+        parts.append(chunk)
+    return "".join(parts)
 
-        bullet_match = _BULLET_RE.match(line)
-        if bullet_match:
-            flush()
-            while i < len(lines) and _BULLET_RE.match(lines[i].strip()):
-                item_text = _BULLET_RE.match(lines[i].strip()).group(1)
-                elements.append(
-                    Paragraph(
-                        f"•  {_inline_markdown(item_text)}", styles["Bullet"]
-                    )
-                )
-                i += 1
-            continue
 
-        numbered_match = _NUMBERED_RE.match(line)
-        if numbered_match:
-            flush()
-            n = 1
-            while i < len(lines) and _NUMBERED_RE.match(lines[i].strip()):
-                item_text = _NUMBERED_RE.match(lines[i].strip()).group(1)
-                elements.append(
-                    Paragraph(
-                        f"{n}.  {_inline_markdown(item_text)}",
-                        styles["Numbered"],
-                    )
-                )
-                n += 1
-                i += 1
-            continue
+def _render_block(node: DocumentNode, styles: dict) -> list:
+    if node.type == HEADING_2:
+        return [Paragraph(_render_inline(node.children), styles["Heading2"])]
 
-        buffer.append(line)
-        i += 1
+    if node.type == PARAGRAPH:
+        return [Paragraph(_render_inline(node.children), styles["Body"])]
 
-    flush()
-    return elements
+    if node.type == BULLETED_LIST:
+        return [
+            Paragraph(f"•  {_render_inline(item.children)}", styles["Bullet"])
+            for item in node.children
+        ]
+
+    if node.type == NUMBERED_LIST:
+        return [
+            Paragraph(
+                f"{i}.  {_render_inline(item.children)}", styles["Numbered"]
+            )
+            for i, item in enumerate(node.children, start=1)
+        ]
+
+    raise DocumentBuildError(f"Unsupported block node in section: '{node.type}'")
 
 
 def _safe_filename(title: str) -> str:

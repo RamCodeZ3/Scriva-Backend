@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import BaseModel, Field
 
 
@@ -12,10 +14,26 @@ class CreateDocumentRequest(BaseModel):
     additional_notes: str | None = None
 
 
-class DocumentSectionOut(BaseModel):
-    section_type: str
+class DocumentNodeOut(BaseModel):
+    id: str | None = None
+    type: str | None = None
+    section_type: str | None = None
+    text: str | None = None
+    marks: list[str] | None = None
+    children: list["DocumentNodeOut"] | None = None
+
+
+DocumentNodeOut.model_rebuild()
+
+
+class DocumentMetaOut(BaseModel):
     title: str
-    content: str
+    style_guide: str = "APA7"
+
+
+class DocumentStylesOut(BaseModel):
+    fontFamily: str = "Times New Roman, serif"
+    fontSize: str = "12pt"
 
 
 class CreateDocumentResponse(BaseModel):
@@ -23,7 +41,9 @@ class CreateDocumentResponse(BaseModel):
     document_id: str
     document_type: str
     document_title: str
-    document_sections: list[DocumentSectionOut]
+    meta: DocumentMetaOut
+    document_styles: DocumentStylesOut
+    document_nodes: list[DocumentNodeOut]
     error_message: str | None = None
 
 
@@ -40,7 +60,9 @@ class DocumentGetResponse(BaseModel):
     title: str
     document_type: str
     status: str
-    sections: list[DocumentSectionOut]
+    meta: DocumentMetaOut
+    document_styles: DocumentStylesOut
+    document_nodes: list[DocumentNodeOut]
     user_id: str
     presentation: PresentationOut
     error_message: str | None = None
@@ -51,15 +73,16 @@ class DocumentGetResponse(BaseModel):
 
 class UpdateDocumentRequest(BaseModel):
     title: str | None = None
-    sections: list[DocumentSectionOut] | None = None
+    document_nodes: list[DocumentNodeOut] | None = None
     presentation: PresentationOut | None = None
+    document_styles: DocumentStylesOut | None = None
 
 
 class DocumentPatchResponse(BaseModel):
     id: str
     title: str
     document_type: str
-    sections: list[DocumentSectionOut]
+    document_nodes: list[DocumentNodeOut]
     user_id: str
     presentation: PresentationOut
     error_message: str | None = None
