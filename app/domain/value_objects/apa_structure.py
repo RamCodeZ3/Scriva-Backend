@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from domain.value_objects.document_node import HEADING_1, DocumentNode
 
@@ -28,16 +29,23 @@ class APASectionType(Enum):
         }[self.name]
 
 
-APA7_DOCUMENT_STYLES: dict[str, str] = {
+APA7_DOCUMENT_STYLES: dict[str, Any] = {
     "fontFamily": "Times New Roman, serif",
     "fontSize": "12pt",
+    "color": "#000000",
+    "backgroundColor": "#ffffff",
+    "pageMargin": "1in",
+    "pageSize": "letter",
+    "orientation": "portrait",
+    "lineHeight": 2.0,
 }
 
 
 @dataclass(frozen=True)
 class APASection:
     """A logical APA section: its heading node plus the block nodes
-    (paragraphs, subheadings, lists) that make up its body, in order."""
+    (paragraphs, subheadings, lists, images) that make up its body, in
+    order."""
 
     section_type: APASectionType
     heading: DocumentNode

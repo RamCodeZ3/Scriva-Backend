@@ -11,7 +11,7 @@ from domain.value_objects.apa_structure import (
     APASection,
     APASectionType,
 )
-from domain.value_objects.document_node import HEADING_1, DocumentNode
+from domain.value_objects.document_node import HEADING_1, IMAGE, DocumentNode, Mark
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 
@@ -64,6 +64,7 @@ from api.schemas.documents import (
     DocumentStylesOut,
     ExportDocumentRequest,
     ExportDocumentResponse,
+    MarkOut,
     PresentationOut,
     UpdateDocumentRequest,
     DocumentReferenceResponse,
@@ -311,7 +312,7 @@ def _title_snippet(body: CreateDocumentRequest) -> str:
 def _styles_out(result) -> DocumentStylesOut:
     # `result` is whatever DTO the use case returns; if it doesn't carry
     # `document_styles` yet, fall back to the fixed APA7 defaults.
-    styles = getattr(result, "document_styles", None) or APA7_DOCUMENT_STYLES
+    styles = {**APA7_DOCUMENT_STYLES, **(getattr(result, "document_styles", None) or {})}
     return DocumentStylesOut(**styles)
 
 
@@ -325,23 +326,27 @@ def _presentation_out(p: PresentationInfo) -> PresentationOut:
     )
 
 
-# --- node tree <-> APASection conversion -----------------------------------
-#
-# `result.sections` (a list[APASection]) is the domain's grouped view; the
-# API instead speaks a flat, ordered list of DocumentNodeOut (one heading-1
-# node per section, immediately followed by that section's body nodes) —
-# exactly the shape Document.to_node_tree()["children"] produces.
-
-
 def _node_out(node: DocumentNode) -> DocumentNodeOut:
     if node.text is not None:
+        marks = [MarkOut(type=m.type, value=m.value) for m in node.marks]
+        return DocumentNodeOut(text=node.text, marks=marks or None)
+
+    if node.type == IMAGE:
         return DocumentNodeOut(
-            text=node.text, marks=list(node.marks) if node.marks else None
+            id=node.id,
+            type=node.type,
+            section_type=node.section_type,
+            styles=dict(node.styles) if node.styles else None,
+            src=node.src,
+            alt=node.alt,
+            caption=node.caption,
         )
+
     return DocumentNodeOut(
         id=node.id,
         type=node.type,
         section_type=node.section_type,
+        styles=dict(node.styles) if node.styles else None,
         children=[_node_out(c) for c in node.children],
     )
 
@@ -356,19 +361,30 @@ def _nodes_out(sections: list[APASection]) -> list[DocumentNodeOut]:
 
 def _node_from_out(node: DocumentNodeOut) -> DocumentNode:
     if node.text is not None:
-        return DocumentNode(text=node.text, marks=tuple(node.marks or ()))
+        marks = tuple(Mark(type=m.type, value=m.value) for m in (node.marks or ()))
+        return DocumentNode(text=node.text, marks=marks)
+
+    if node.type == IMAGE:
+        return DocumentNode(
+            type=node.type,
+            id=node.id,
+            section_type=node.section_type,
+            styles=dict(node.styles or {}),
+            src=node.src,
+            alt=node.alt,
+            caption=node.caption,
+        )
+
     return DocumentNode(
         type=node.type,
         id=node.id,
         section_type=node.section_type,
+        styles=dict(node.styles or {}),
         children=tuple(_node_from_out(c) for c in (node.children or ())),
     )
 
 
 def _sections_from_nodes(nodes: list[DocumentNodeOut]) -> list[APASection]:
-    """Regroup a flat, ordered node list back into APASections: each
-    'heading-1' node starts a new section, everything after it (until the
-    next heading-1) is that section's body."""
     heading: DocumentNode | None = None
     section_type: APASectionType | None = None
     body: list[DocumentNode] = []

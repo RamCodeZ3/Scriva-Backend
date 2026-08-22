@@ -10,9 +10,11 @@ from google.genai import types
 from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import APASection, APASectionType
 from domain.value_objects.document_node import (
+    BLOCK_QUOTE,
     BULLETED_LIST,
     HEADING_1,
     HEADING_2,
+    IMAGE,
     LIST_ITEM,
     NUMBERED_LIST,
     PARAGRAPH,
@@ -43,17 +45,40 @@ _NODE_SCHEMA_RULES = (
     "academic prose, one idea per paragraph.\n"
     f'  - {{"type": "{HEADING_2}", "children": [ TEXT ]}} — a subtopic '
     "heading, used sparingly and mostly inside 'body' for genuine subtopic "
-    "breaks. Never inside 'presentation' or 'index'.\n"
+    f"breaks. Never inside 'presentation' or 'index'. Deeper levels "
+    f'("heading-3", "heading-4", "heading-5") exist for genuinely nested '
+    "subtopics but are rarely needed — do not use them just to vary "
+    "appearance.\n"
+    f'  - {{"type": "{BLOCK_QUOTE}", "children": [ PARAGRAPH-like TEXT '
+    'children ]}} — ONLY for a direct quotation of 40+ words per APA 7 '
+    "(shorter quotes stay inline inside a normal paragraph, in quotation "
+    "marks).\n"
     f'  - {{"type": "{BULLETED_LIST}", "children": [ LIST_ITEM, ... ]}} — '
     "use ONLY when items have no meaningful order (parallel examples, "
     "equivalent characteristics).\n"
     f'  - {{"type": "{NUMBERED_LIST}", "children": [ LIST_ITEM, ... ]}} — '
     "use when items are steps, a chronology, or a ranked hierarchy.\n"
     f'  A LIST_ITEM is {{"type": "{LIST_ITEM}", "children": [ TEXT, ... ]}}.\n'
-    '  A TEXT node is a leaf: {"text": "..."} or '
-    '{"text": "...", "marks": ["bold"]} / ["underline"] — use marks only '
-    "where genuinely useful (key terms, titles requiring underlining), "
-    "never on whole sentences, never overused.\n"
+    '  A TEXT node is a leaf: {"text": "..."} or, when a mark is genuinely '
+    'useful, {"text": "...", "marks": [ MARK, ... ]}. Each MARK is an '
+    'object {"type": "bold"} or {"type": "color", "value": "#d93025"}. '
+    "Valid mark types: 'bold', 'italic', 'underline', 'strikethrough' (no "
+    "value needed); 'script' (value: \"superscript\" or \"subscript\"); "
+    "'color' / 'highlight' (value: a hex color string); 'link' (value: "
+    '{"url": "..."}) — only when the source material names a URL to '
+    "cite inline. Use marks sparingly, never on whole sentences, never "
+    "invented decoration.\n"
+    "  Block nodes ('paragraph', 'heading-N', 'block-quote', the two list "
+    "types) may optionally carry a 'styles' object (textAlign, "
+    "textIndent, marginTop/Bottom/Left/Right, lineHeight, "
+    "backgroundColor, borderLeft, etc.) — but leave 'styles' OUT entirely "
+    "unless the user's additional notes explicitly ask for particular "
+    "visual formatting. The default APA 7 look (no custom styles) is "
+    "correct for the overwhelming majority of requests.\n"
+    '  NEVER output a node with "type": "image". You have no way to '
+    "produce a real, working file URL, so an invented 'src' would be a "
+    "broken link — images are inserted by the application separately, "
+    "after your text is generated.\n"
     "Rules that still apply regardless of node type:\n"
     "- Lists are the exception, not the default: most content must be "
     "'paragraph' nodes. Every item in a list must be grammatically "
@@ -91,6 +116,11 @@ _SYSTEM_INSTRUCTION = (
     "will paginate. The renderer builds the authoritative, paginated table "
     "of contents separately from the real headings; treat this section "
     "only as a narrative overview.\n"
+    "10. If the user's additional notes explicitly request custom "
+    "visual formatting (a specific color, alignment, emphasis, a "
+    "highlighted term, a quote box, etc.), honor it using 'styles' on the "
+    "relevant block node(s) and/or 'marks' on the relevant text — but "
+    "only for what was actually requested, nothing more.\n"
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
 )
@@ -122,6 +152,11 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     "it following the same rule as before: only the structured fields "
     "(student name, institution, subject, professor, student ID, date), "
     "one per paragraph node, never a summary of the document's topic.\n"
+    "12. Preserve any existing 'styles' or 'marks' you see on nodes you "
+    "keep or lightly edit — don't strip formatting the user (or a previous "
+    "request) explicitly asked for. Only add new 'styles'/'marks' if the "
+    "current additional notes explicitly request them, and never invent "
+    "'image' nodes yourself.\n"
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
 )
@@ -250,8 +285,9 @@ Topic / working title given by the user (use this only as a hint about the
 subject — do NOT copy it verbatim, and especially never use it if it is a
 URL): "{title}"
 
-Additional notes from the user (extraction guidance, tone, focus, or a
-questionnaire to answer inside "body"): {notes}
+Additional notes from the user (extraction guidance, tone, focus, a
+questionnaire to answer inside "body", or explicit formatting requests to
+honor via 'styles'/'marks'): {notes}
 
 Required sections, in this exact order: {section_names}.
 
@@ -392,8 +428,11 @@ de-duplicated list (old entries plus any genuinely new ones).
 
         try:
             body_nodes = tuple(
-                _with_replaced(
-                    DocumentNode.from_dict(n), section_type=section_type.value
+                self._reject_image(
+                    _with_replaced(
+                        DocumentNode.from_dict(n),
+                        section_type=section_type.value,
+                    )
                 )
                 for n in raw_nodes
             )
@@ -411,6 +450,14 @@ de-duplicated list (old entries plus any genuinely new ones).
         return APASection(
             section_type=section_type, heading=heading, body_nodes=body_nodes
         )
+
+    def _reject_image(self, node: DocumentNode) -> DocumentNode:
+        if node.type == IMAGE:
+            raise DocumentBuildError(
+                "Gemini generated an 'image' node, which isn't allowed — "
+                "images are inserted by the application, not the writer."
+            )
+        return node
 
     def _parse_references(self, data: dict) -> list[SourceReference]:
         try:

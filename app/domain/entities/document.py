@@ -47,7 +47,7 @@ class Document:
     updated_at: datetime
     error_message: str | None = None
     additional_notes: str | None = None
-    document_styles: dict[str, str] = field(
+    document_styles: dict[str, Any] = field(
         default_factory=lambda: dict(APA7_DOCUMENT_STYLES)
     )
 
@@ -95,7 +95,7 @@ class Document:
         title: str,
         sections: list[APASection],
         sources: list[SourceReference],
-        document_styles: dict[str, str] | None = None,
+        document_styles: dict[str, Any] | None = None,
     ) -> None:
         self._assert_status(DocumentStatus.GENERATING)
         self._validate_sections(sections)
@@ -113,7 +113,7 @@ class Document:
         title: str | None = None,
         sections: list[APASection] | None = None,
         presentation: PresentationInfo | None = None,
-        document_styles: dict[str, str] | None = None,
+        document_styles: dict[str, Any] | None = None,
     ) -> None:
         if title is not None:
             self.title = title

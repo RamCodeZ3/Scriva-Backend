@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -14,13 +16,24 @@ class CreateDocumentRequest(BaseModel):
     additional_notes: str | None = None
 
 
+class MarkOut(BaseModel):
+    """Mirrors domain.value_objects.document_node.Mark."""
+
+    type: str
+    value: Any | None = None
+
+
 class DocumentNodeOut(BaseModel):
     id: str | None = None
     type: str | None = None
     section_type: str | None = None
     text: str | None = None
-    marks: list[str] | None = None
+    marks: list[MarkOut] | None = None
     children: list["DocumentNodeOut"] | None = None
+    styles: dict[str, Any] | None = None
+    src: str | None = None
+    alt: str | None = None
+    caption: str | None = None
 
 
 DocumentNodeOut.model_rebuild()
@@ -34,6 +47,12 @@ class DocumentMetaOut(BaseModel):
 class DocumentStylesOut(BaseModel):
     fontFamily: str = "Times New Roman, serif"
     fontSize: str = "12pt"
+    color: str = "#000000"
+    backgroundColor: str = "#ffffff"
+    pageMargin: Any = "1in"
+    pageSize: Any = "letter"
+    orientation: str = "portrait"
+    lineHeight: float = 2.0
 
 
 class CreateDocumentResponse(BaseModel):
