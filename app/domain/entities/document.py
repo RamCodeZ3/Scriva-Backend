@@ -1,12 +1,17 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID, uuid4
 from enum import Enum
+from typing import Any
 
 from domain.entities.source import Source
 from domain.value_objects.document_type import DocumentType
-from domain.value_objects.apa_structure import APASection, APASectionType
+from domain.value_objects.apa_structure import (
+    APA7_DOCUMENT_STYLES,
+    APASection,
+    APASectionType,
+)
 from domain.value_objects.source_ref import SourceReference
 from domain.value_objects.presentation_info import PresentationInfo
 from domain.exceptions import DocumentBuildError
@@ -42,6 +47,9 @@ class Document:
     updated_at: datetime
     error_message: str | None = None
     additional_notes: str | None = None
+    document_styles: dict[str, Any] = field(
+        default_factory=lambda: dict(APA7_DOCUMENT_STYLES)
+    )
 
     @classmethod
     def create(
@@ -87,30 +95,16 @@ class Document:
         title: str,
         sections: list[APASection],
         sources: list[SourceReference],
+        document_styles: dict[str, Any] | None = None,
     ) -> None:
         self._assert_status(DocumentStatus.GENERATING)
-
-        if not sections:
-            raise DocumentBuildError(
-                "A document must have at least one section."
-            )
-
-        required = {
-            APASectionType.PRESENTATION,
-            APASectionType.INDEX,
-            APASectionType.INTRODUCTION,
-            APASectionType.BODY,
-            APASectionType.CONCLUSION,
-            APASectionType.SOURCES,
-        }
-        missing = required - {s.section_type for s in sections}
-        if missing:
-            names = ", ".join(m.value for m in missing)
-            raise DocumentBuildError(f"Missing required APA sections: {names}")
+        self._validate_sections(sections)
 
         self.title = title
         self.sections = sorted(sections, key=lambda s: s.section_type.order)
         self.sources = sources
+        if document_styles is not None:
+            self.document_styles = document_styles
         self.status = DocumentStatus.DONE
         self._touch()
 
@@ -119,6 +113,7 @@ class Document:
         title: str | None = None,
         sections: list[APASection] | None = None,
         presentation: PresentationInfo | None = None,
+        document_styles: dict[str, Any] | None = None,
     ) -> None:
         if title is not None:
             self.title = title
@@ -128,6 +123,8 @@ class Document:
             )
         if presentation is not None:
             self.presentation = presentation
+        if document_styles is not None:
+            self.document_styles = document_styles
         self._touch()
 
     def augment(
@@ -142,6 +139,7 @@ class Document:
                 f"Cannot add info to a document in '{self.status.value}' status; "
                 "it must be 'done'."
             )
+        self._validate_sections(sections)
         self.title = title
         self.sections = sorted(sections, key=lambda s: s.section_type.order)
         self.sources = sources
@@ -160,6 +158,39 @@ class Document:
         return next(
             (s for s in self.sections if s.section_type == section_type), None
         )
+
+    def to_node_tree(self) -> dict[str, Any]:
+        """Serialize the whole document as a single ProseMirror-like tree:
+        `{meta, document_styles, children}`. This is the shape a node-based
+        renderer/editor (and the API layer) should consume directly."""
+        children: list[dict[str, Any]] = []
+        for section in self.sections:
+            children.append(section.heading.to_dict())
+            children.extend(node.to_dict() for node in section.body_nodes)
+
+        return {
+            "meta": {"title": self.title, "style_guide": "APA7"},
+            "document_styles": dict(self.document_styles),
+            "children": children,
+        }
+
+    def _validate_sections(self, sections: list[APASection]) -> None:
+        if not sections:
+            raise DocumentBuildError(
+                "A document must have at least one section."
+            )
+        required = {
+            APASectionType.PRESENTATION,
+            APASectionType.INDEX,
+            APASectionType.INTRODUCTION,
+            APASectionType.BODY,
+            APASectionType.CONCLUSION,
+            APASectionType.SOURCES,
+        }
+        missing = required - {s.section_type for s in sections}
+        if missing:
+            names = ", ".join(m.value for m in missing)
+            raise DocumentBuildError(f"Missing required APA sections: {names}")
 
     def _assert_status(self, expected: DocumentStatus) -> None:
         if self.status != expected:
