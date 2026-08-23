@@ -4,6 +4,7 @@ import uvicorn
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from application.exceptions import (
     ApplicationError,
@@ -23,6 +24,19 @@ from domain.exceptions import DocumentBuildError, InvalidSourceError
 from api.v1.documents import router as documents_router
 
 app = FastAPI(title="APA Document Generator API")
+
+origins = [
+    "http://localhost",
+    "http://localhost:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(documents_router)
 
