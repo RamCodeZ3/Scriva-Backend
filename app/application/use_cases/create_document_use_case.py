@@ -1,6 +1,7 @@
 from application.dtos.document_dtos import (
     CreateDocumentInput,
     DocumentOutput,
+    build_source_errors,
 )
 from application.exceptions import UserNotFoundError
 from application.ports.document_job_dispatcher_port import (
@@ -46,7 +47,10 @@ class CreateDocumentUseCase:
         )
         await self._documents.save(document)
 
-        await self._dispatcher.dispatch(document.id)
+        try:
+            await self._dispatcher.dispatch(document.id)
+        except Exception:
+            pass
 
         final_document = (
             await self._documents.get_by_id(document.id) or document
@@ -60,8 +64,9 @@ class CreateDocumentUseCase:
             sections=final_document.sections,
             user_id=final_document.user_id,
             presentation=final_document.presentation,
-            source_ids=final_document.sources,
             error_message=final_document.error_message,
+            source_ids=[s.id for s in final_document.raw_sources],
+            source_errors=build_source_errors(final_document.raw_sources),
             created_at=final_document.created_at,
             updated_at=final_document.updated_at,
         )

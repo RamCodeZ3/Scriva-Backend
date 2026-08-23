@@ -24,3 +24,8 @@ class UnsupportedSourceTypeError(ApplicationError):
 
 class DocumentAccessDeniedError(ApplicationError):
     """Raised when a document is requested/modified by a user who doesn't own it."""
+
+
+class NoSourcesExtractedError(ApplicationError):
+    """Raised when *every* source of a document/augment operation failed
+    extraction, so there is no content left to hand to the writer."""

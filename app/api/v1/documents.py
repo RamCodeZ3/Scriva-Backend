@@ -67,10 +67,10 @@ from api.schemas.documents import (
     PresentationOut,
     UpdateDocumentRequest,
     DocumentReferenceResponse,
+    SourceErrorOut,
 )
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
-
 
 @router.post("/", response_model=DocumentResponse)
 async def create_document(
@@ -115,7 +115,8 @@ async def create_document(
         document_nodes=_nodes_out(result.sections),
         user_id=str(result.user_id),
         presentation=_presentation_out(result.presentation),
-        error_message=result.error_message,
+        document_error=result.error_message,
+        sources_error=_sources_error_out(result),
         source_ids=[str(sid) for sid in result.source_ids],
         created_at=result.created_at.isoformat(),
         updated_at=result.updated_at.isoformat()
@@ -174,7 +175,8 @@ async def get_document(
         document_nodes=_nodes_out(result.sections),
         user_id=str(result.user_id),
         presentation=_presentation_out(result.presentation),
-        error_message=result.error_message,
+        document_error=result.error_message,
+        sources_error=_sources_error_out(result),
         source_ids=[str(sid) for sid in result.source_ids],
         created_at=result.created_at.isoformat(),
         updated_at=result.updated_at.isoformat(),
@@ -187,7 +189,7 @@ async def augment_document(
     body: AugmentDocumentRequest,
     current_user: User = Depends(get_current_user),
     use_case: AugmentDocumentUseCase = Depends(get_augment_document_use_case),
-) -> DocumentGetResponse:
+) -> DocumentResponse:
     data = AugmentDocumentInput(
         document_id=document_id,
         user_id=current_user.id,
@@ -206,7 +208,8 @@ async def augment_document(
         document_nodes=_nodes_out(result.sections),
         user_id=str(result.user_id),
         presentation=_presentation_out(result.presentation),
-        error_message=result.error_message,
+        document_error=result.error_message,
+        sources_error=_sources_error_out(result),
         source_ids=[str(sid) for sid in result.source_ids],
         created_at=result.created_at.isoformat(),
         updated_at=result.updated_at.isoformat(),
@@ -256,7 +259,8 @@ async def update_document(
         document_nodes=_nodes_out(result.sections),
         user_id=str(result.user_id),
         presentation=_presentation_out(result.presentation),
-        error_message=result.error_message,
+        document_error=result.error_message,
+        sources_error=_sources_error_out(result),
         source_ids=[str(sid) for sid in result.source_ids],
         updated_at=result.updated_at.isoformat(),
     )
@@ -429,3 +433,10 @@ def _sections_from_nodes(nodes: list[DocumentNodeOut]) -> list[APASection]:
 
     _flush()
     return sections
+
+
+def _sources_error_out(result) -> list[SourceErrorOut]:
+    return [
+        SourceErrorOut(source_id=str(e.source_id), raw=e.raw, error=e.error)
+        for e in getattr(result, "source_errors", None) or []
+    ]

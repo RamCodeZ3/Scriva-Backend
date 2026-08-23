@@ -23,6 +23,12 @@ class MarkOut(BaseModel):
     value: Any | None = None
 
 
+class SourceErrorOut(BaseModel):
+    source_id: str
+    raw: str
+    error: str
+
+
 class DocumentNodeOut(BaseModel):
     id: str | None = None
     type: str | None = None
@@ -55,6 +61,7 @@ class DocumentStylesOut(BaseModel):
     lineHeight: float = 2.0
 
 
+
 class DocumentResponse(BaseModel):
     id: str
     title: str
@@ -65,7 +72,8 @@ class DocumentResponse(BaseModel):
     document_nodes: list[DocumentNodeOut]
     user_id: str
     presentation: PresentationOut
-    error_message: str | None = None
+    document_error: str | None = None
+    sources_error: list[SourceErrorOut] = Field(default_factory=list)
     source_ids: list[str]
     created_at: str
     updated_at: str
@@ -93,7 +101,8 @@ class DocumentPatchResponse(BaseModel):
     document_nodes: list[DocumentNodeOut]
     user_id: str
     presentation: PresentationOut
-    error_message: str | None = None
+    document_error: str | None = None
+    sources_error: list[SourceErrorOut] = Field(default_factory=list)
     source_ids: list[str]
     updated_at: str
 
