@@ -55,9 +55,8 @@ from api.deps import (
 from api.schemas.documents import (
     AugmentDocumentRequest,
     CreateDocumentRequest,
-    CreateDocumentResponse,
+    DocumentResponse,
     DeleteDocumentResponse,
-    DocumentGetResponse,
     DocumentMetaOut,
     DocumentNodeOut,
     DocumentPatchResponse,
@@ -73,12 +72,12 @@ from api.schemas.documents import (
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
 
-@router.post("/", response_model=CreateDocumentResponse)
+@router.post("/", response_model=DocumentResponse)
 async def create_document(
     body: CreateDocumentRequest,
     current_user: User = Depends(get_current_user),
     use_case: CreateDocumentUseCase = Depends(get_create_document_use_case),
-) -> CreateDocumentResponse:
+) -> DocumentResponse:
     try:
         document_type = DocumentType(body.document_type)
     except ValueError as exc:
@@ -106,15 +105,20 @@ async def create_document(
 
     result = await use_case.execute(data)
 
-    return CreateDocumentResponse(
-        status=result.status.value,
-        document_id=str(result.document_id),
+    return DocumentResponse(
+        id=str(result.id),
+        title=result.title,
         document_type=result.document_type.value,
-        document_title=result.document_title,
-        meta=DocumentMetaOut(title=result.document_title),
+        status=result.status.value,
+        meta=DocumentMetaOut(title=result.title),
         document_styles=_styles_out(result),
         document_nodes=_nodes_out(result.sections),
+        user_id=str(result.user_id),
+        presentation=_presentation_out(result.presentation),
         error_message=result.error_message,
+        source_ids=[str(sid) for sid in result.source_ids],
+        created_at=result.created_at.isoformat(),
+        updated_at=result.updated_at.isoformat()
     )
 
 
@@ -152,15 +156,15 @@ async def export_document(
     )
 
 
-@router.get("/{document_id}", response_model=DocumentGetResponse)
+@router.get("/{document_id}", response_model=DocumentResponse)
 async def get_document(
     document_id: UUID,
     current_user: User = Depends(get_current_user),
     use_case: GetDocumentUseCase = Depends(get_get_document_use_case),
-) -> DocumentGetResponse:
+) -> DocumentResponse:
     result = await use_case.execute(document_id, current_user.id)
 
-    return DocumentGetResponse(
+    return DocumentResponse(
         id=str(result.id),
         title=result.title,
         document_type=result.document_type.value,
@@ -177,7 +181,7 @@ async def get_document(
     )
 
 
-@router.patch("/ia/{document_id}", response_model=DocumentGetResponse)
+@router.patch("/ia/{document_id}", response_model=DocumentResponse)
 async def augment_document(
     document_id: UUID,
     body: AugmentDocumentRequest,
@@ -192,7 +196,7 @@ async def augment_document(
     )
     result = await use_case.execute(data)
 
-    return DocumentGetResponse(
+    return DocumentResponse(
         id=str(result.id),
         title=result.title,
         document_type=result.document_type.value,

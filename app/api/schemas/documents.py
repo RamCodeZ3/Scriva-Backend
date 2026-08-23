@@ -55,26 +55,7 @@ class DocumentStylesOut(BaseModel):
     lineHeight: float = 2.0
 
 
-class CreateDocumentResponse(BaseModel):
-    status: str
-    document_id: str
-    document_type: str
-    document_title: str
-    meta: DocumentMetaOut
-    document_styles: DocumentStylesOut
-    document_nodes: list[DocumentNodeOut]
-    error_message: str | None = None
-
-
-class PresentationOut(BaseModel):
-    student_name: str
-    professor: str
-    subject: str | None = None
-    student_id: str | None = None
-    institution: str | None = None
-
-
-class DocumentGetResponse(BaseModel):
+class DocumentResponse(BaseModel):
     id: str
     title: str
     document_type: str
@@ -88,6 +69,14 @@ class DocumentGetResponse(BaseModel):
     source_ids: list[str]
     created_at: str
     updated_at: str
+
+
+class PresentationOut(BaseModel):
+    student_name: str
+    professor: str
+    subject: str | None = None
+    student_id: str | None = None
+    institution: str | None = None
 
 
 class UpdateDocumentRequest(BaseModel):

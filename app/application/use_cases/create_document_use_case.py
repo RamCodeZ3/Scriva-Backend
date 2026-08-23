@@ -1,6 +1,6 @@
 from application.dtos.document_dtos import (
     CreateDocumentInput,
-    CreateDocumentOutput,
+    DocumentOutput,
 )
 from application.exceptions import UserNotFoundError
 from application.ports.document_job_dispatcher_port import (
@@ -27,7 +27,7 @@ class CreateDocumentUseCase:
         self._users = user_repository
         self._dispatcher = job_dispatcher
 
-    async def execute(self, data: CreateDocumentInput) -> CreateDocumentOutput:
+    async def execute(self, data: CreateDocumentInput) -> DocumentOutput:
         user = await self._users.get_by_id(data.user_id)
         if user is None:
             raise UserNotFoundError(f"User '{data.user_id}' does not exist.")
@@ -52,11 +52,16 @@ class CreateDocumentUseCase:
             await self._documents.get_by_id(document.id) or document
         )
 
-        return CreateDocumentOutput(
-            document_id=final_document.id,
-            status=final_document.status,
+        return DocumentOutput(
+            id=final_document.id,
+            title=final_document.title,
             document_type=final_document.document_type,
-            document_title=final_document.title,
+            status=final_document.status,
             sections=final_document.sections,
+            user_id=final_document.user_id,
+            presentation=final_document.presentation,
+            source_ids=final_document.sources,
             error_message=final_document.error_message,
+            created_at=final_document.created_at,
+            updated_at=final_document.updated_at,
         )
