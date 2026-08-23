@@ -1,12 +1,16 @@
 from uuid import UUID
 
-from application.exceptions import DocumentNotFoundError, SourceNotFoundError
+from application.exceptions import (
+    DocumentNotFoundError,
+    NoSourcesExtractedError,
+    SourceNotFoundError,
+)
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
 from application.ports.source_repository_port import SourceRepositoryPort
 
-from domain.entities.source import SourceStatus
+from domain.entities.source import Source
 
 
 class ProcessDocumentUseCase:
@@ -29,7 +33,7 @@ class ProcessDocumentUseCase:
                 f"Document '{document_id}' does not exist."
             )
 
-        sources = []
+        sources: list[Source] = []
         for raw_source in document.raw_sources:
             source = await self._sources.get_by_id(raw_source.id)
             if source is None:
@@ -42,17 +46,16 @@ class ProcessDocumentUseCase:
             document.start_extraction()
             await self._documents.save(document)
 
-            for source in sources:
-                extractor = self._extractor_factory.get_extractor(
-                    source.source_type
+            extracted_sources = await self._extract_sources(sources)
+
+            if not extracted_sources:
+                raise NoSourcesExtractedError(
+                    "None of the provided sources could be extracted."
                 )
-                content = await extractor.extract(source.raw)
-                source.mark_extracted(content)
-                await self._sources.save(source)
 
             combined_content = "\n\n".join(
                 f"[Fuente {i + 1}]\n{s.get_content()}"
-                for i, s in enumerate(sources)
+                for i, s in enumerate(extracted_sources)
             )
 
             document.start_generation()
@@ -71,10 +74,22 @@ class ProcessDocumentUseCase:
             await self._documents.save(document)
 
         except Exception as exc:
-            for source in sources:
-                if source.status != SourceStatus.EXTRACTED:
-                    source.mark_failed(str(exc))
-                    await self._sources.save(source)
             document.fail(str(exc))
             await self._documents.save(document)
             raise
+
+    async def _extract_sources(self, sources: list[Source]) -> list[Source]:
+        extracted: list[Source] = []
+        for source in sources:
+            try:
+                extractor = self._extractor_factory.get_extractor(
+                    source.source_type
+                )
+                content = await extractor.extract(source.raw)
+                source.mark_extracted(content)
+                extracted.append(source)
+            except Exception as exc:
+                source.mark_failed(str(exc))
+            finally:
+                await self._sources.save(source)
+        return extracted

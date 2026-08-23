@@ -9,6 +9,7 @@ from application.exceptions import (
     ApplicationError,
     DocumentAccessDeniedError,
     DocumentNotFoundError,
+    NoSourcesExtractedError,
     SourceNotFoundError,
     UnsupportedSourceTypeError,
     UserAlreadyExistsError,
@@ -94,6 +95,13 @@ async def application_error_handler(
     request: Request, exc: ApplicationError
 ) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(NoSourcesExtractedError)
+async def no_sources_extracted_handler(
+    request: Request, exc: NoSourcesExtractedError
+) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 
 if __name__ == "__main__":

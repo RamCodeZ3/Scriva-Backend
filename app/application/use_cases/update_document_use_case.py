@@ -1,4 +1,8 @@
-from application.dtos.document_dtos import DocumentOutput, UpdateDocumentInput
+from application.dtos.document_dtos import (
+    DocumentOutput,
+    UpdateDocumentInput,
+    build_source_errors,
+)
 from application.exceptions import (
     DocumentAccessDeniedError,
     DocumentNotFoundError,
@@ -38,6 +42,7 @@ class UpdateDocumentUseCase:
             presentation=document.presentation,
             error_message=document.error_message,
             source_ids=[s.id for s in document.raw_sources],
+            source_errors=build_source_errors(document.raw_sources),
             created_at=document.created_at,
             updated_at=document.updated_at,
         )
