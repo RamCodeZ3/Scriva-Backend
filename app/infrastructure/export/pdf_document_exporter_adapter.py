@@ -4,38 +4,65 @@ import asyncio
 import re
 from datetime import date
 from io import BytesIO
+from urllib.request import urlopen
 from xml.sax.saxutils import escape as _xml_escape
 
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
-from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
+from reportlab.lib.pagesizes import A4, letter
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
+    Image,
     PageBreak,
     PageTemplate,
     Paragraph,
     Spacer,
+    Table,
+    TableStyle,
 )
 from reportlab.platypus.tableofcontents import TableOfContents
 
 from domain.entities.document import Document
 from domain.exceptions import DocumentBuildError
-from domain.value_objects.apa_structure import APASectionType
+from domain.value_objects.apa_structure import APA7_DOCUMENT_STYLES, APASectionType
+from domain.value_objects.document_node import (
+    BLOCK_QUOTE,
+    BULLETED_LIST,
+    HEADING_2,
+    HEADING_3,
+    HEADING_4,
+    HEADING_5,
+    IMAGE,
+    NUMBERED_LIST,
+    PARAGRAPH,
+    DocumentNode,
+)
 
 from application.dtos.export_result import ExportResult
 from application.ports.document_exporter_port import DocumentExporterPort
 
-_PAGE_SIZE = letter
-_MARGIN = inch
-_LEADING = 24
 
-_BULLET_RE = re.compile(r"^[-*]\s+(.*)$")
-_NUMBERED_RE = re.compile(r"^\d+[.)]\s+(.*)$")
-_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
-_UNDERLINE_RE = re.compile(r"__(.+?)__")
-SUBHEADING_TOKEN = "## "
+_PAGE_SIZES = {"letter": letter, "a4": A4}
+_ALIGN_MAP = {
+    "left": TA_LEFT,
+    "center": TA_CENTER,
+    "right": TA_RIGHT,
+    "justify": TA_JUSTIFY,
+}
+_FONT_FAMILIES = {
+    "times new roman": ("Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic"),
+    "times": ("Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic"),
+    "serif": ("Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic"),
+    "arial": ("Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique"),
+    "helvetica": ("Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique"),
+    "sans-serif": ("Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique"),
+    "courier": ("Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique"),
+    "monospace": ("Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique"),
+}
 
 
 class _ApaDocTemplate(BaseDocTemplate):
@@ -50,9 +77,6 @@ class _ApaDocTemplate(BaseDocTemplate):
 
 
 class PdfDocumentExporterAdapter(DocumentExporterPort):
-    def __init__(self) -> None:
-        self._styles = _build_styles()
-
     async def export(self, document: Document) -> ExportResult:
         try:
             pdf_bytes = await asyncio.to_thread(self._build_sync, document)
@@ -67,31 +91,40 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         )
 
     def _build_sync(self, document: Document) -> bytes:
+        doc_styles = {**APA7_DOCUMENT_STYLES, **(document.document_styles or {})}
+        page_size = _resolve_page_size(doc_styles)
+        margins = _resolve_margins(doc_styles)
+        content_width = page_size[0] - margins["left"] - margins["right"]
+        styles = _build_styles(doc_styles)
+
         buffer = BytesIO()
         doc = _ApaDocTemplate(
             buffer,
-            pagesize=_PAGE_SIZE,
-            leftMargin=_MARGIN,
-            rightMargin=_MARGIN,
-            topMargin=_MARGIN,
-            bottomMargin=_MARGIN,
+            pagesize=page_size,
+            leftMargin=margins["left"],
+            rightMargin=margins["right"],
+            topMargin=margins["top"],
+            bottomMargin=margins["bottom"],
             title=document.title,
         )
         frame = Frame(
-            _MARGIN,
-            _MARGIN,
-            _PAGE_SIZE[0] - 2 * _MARGIN,
-            _PAGE_SIZE[1] - 2 * _MARGIN,
+            margins["left"],
+            margins["bottom"],
+            content_width,
+            page_size[1] - margins["top"] - margins["bottom"],
             id="normal",
         )
-        doc.addPageTemplates(
-            [PageTemplate(id="all", frames=[frame], onPage=_draw_page_number)]
+        on_page = _make_on_page(
+            page_size=page_size,
+            margins=margins,
+            background=_parse_color(doc_styles.get("backgroundColor"), default=None),
         )
+        doc.addPageTemplates([PageTemplate(id="all", frames=[frame], onPage=on_page)])
 
         story: list = []
-        story += self._build_cover_page(document)
+        story += self._build_cover_page(document, styles)
         story.append(PageBreak())
-        story += self._build_toc_page()
+        story += self._build_toc_page(document, styles)
         story.append(PageBreak())
 
         for section_type in (
@@ -99,19 +132,19 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
             APASectionType.BODY,
             APASectionType.CONCLUSION,
         ):
-            story += self._build_section(document, section_type)
+            story += self._build_section(document, section_type, styles, content_width)
 
         story.append(PageBreak())
-        story += self._build_references(document)
+        story += self._build_references(document, styles)
 
         # multiBuild (not build): see _ApaDocTemplate docstring — this is
         # what lets the index show real, adapter-discovered page numbers.
         doc.multiBuild(story)
         return buffer.getvalue()
 
-    def _build_cover_page(self, document: Document) -> list:
+    def _build_cover_page(self, document: Document, styles: dict) -> list:
+       
         p = document.presentation
-        styles = self._styles
 
         lines = [
             p.student_name,
@@ -133,148 +166,224 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         ]
         return elements
 
-    def _build_toc_page(self) -> list:
+    def _build_toc_page(self, document: Document, styles: dict) -> list:
         toc = TableOfContents()
-        toc.levelStyles = [
-            self._styles["TOCLevel0"],
-            self._styles["TOCLevel1"],
-        ]
+        toc.levelStyles = [styles["TOCLevel0"], styles["TOCLevel1"]]
         toc.dotsMinLevel = (
             0  # dot leaders on every level, not just sub-entries
         )
+        index_section = document.get_section(APASectionType.INDEX)
+        index_title = index_section.title if index_section else "Índice"
         # "Heading1Plain" is intentionally NOT the "Heading1" style, so this
         # heading doesn't register itself as a TOC entry.
-        return [Paragraph("Índice", self._styles["Heading1Plain"]), toc]
+        return [
+            Paragraph(_xml_escape(index_title), styles["Heading1Plain"]),
+            toc,
+        ]
 
     def _build_section(
-        self, document: Document, section_type: APASectionType
+        self,
+        document: Document,
+        section_type: APASectionType,
+        styles: dict,
+        content_width: float,
     ) -> list:
         section = document.get_section(section_type)
         if section is None:
             return []
 
         elements: list = [
-            Paragraph(
-                _inline_markdown(section.title), self._styles["Heading1"]
-            )
+            Paragraph(_xml_escape(section.title), styles["Heading1"])
         ]
-        elements += _render_section_content(section.content, self._styles)
+        for node in section.body_nodes:
+            elements += _render_block(node, styles, content_width)
         return elements
 
-    def _build_references(self, document: Document) -> list:
-        elements: list = [Paragraph("References", self._styles["Heading1"])]
+    def _build_references(self, document: Document, styles: dict) -> list:
+        elements: list = [Paragraph("References", styles["Heading1"])]
         for ref in sorted(
             document.sources, key=lambda r: (r.author or "").lower()
         ):
             elements.append(
-                Paragraph(
-                    _inline_markdown(ref.to_apa_string()),
-                    self._styles["Reference"],
-                )
+                Paragraph(_xml_escape(ref.to_apa_string()), styles["Reference"])
             )
         if not document.sources:
             elements.append(
-                Paragraph("No sources were provided.", self._styles["Body"])
+                Paragraph("No sources were provided.", styles["Body"])
             )
         return elements
 
 
-def _build_styles() -> dict[str, ParagraphStyle]:
+def _build_styles(doc_styles: dict) -> dict[str, ParagraphStyle]:
+    regular, bold, italic, bold_italic = _resolve_font_family(
+        doc_styles.get("fontFamily")
+    )
+    base_size = _parse_length(doc_styles.get("fontSize"), default=12) or 12
+    line_height = _coerce_float(doc_styles.get("lineHeight"), default=2.0)
+    leading = base_size * line_height
+    text_color = _parse_color(doc_styles.get("color"), default=colors.black)
+
     return {
         "TitleCover": ParagraphStyle(
             "TitleCover",
-            fontName="Times-Bold",
-            fontSize=12,
-            leading=_LEADING,
+            fontName=bold,
+            fontSize=base_size,
+            leading=leading,
             alignment=TA_CENTER,
+            textColor=text_color,
         ),
         "CoverLine": ParagraphStyle(
             "CoverLine",
-            fontName="Times-Roman",
-            fontSize=12,
-            leading=_LEADING,
+            fontName=regular,
+            fontSize=base_size,
+            leading=leading,
             alignment=TA_CENTER,
+            textColor=text_color,
         ),
         "Heading1": ParagraphStyle(
             "Heading1",
-            fontName="Times-Bold",
-            fontSize=12,
-            leading=_LEADING,
+            fontName=bold,
+            fontSize=base_size,
+            leading=leading,
             alignment=TA_CENTER,
             spaceBefore=12,
             spaceAfter=12,
+            textColor=text_color,
         ),
         "Heading1Plain": ParagraphStyle(
             "Heading1Plain",
-            fontName="Times-Bold",
-            fontSize=12,
-            leading=_LEADING,
+            fontName=bold,
+            fontSize=base_size,
+            leading=leading,
             alignment=TA_CENTER,
             spaceBefore=12,
             spaceAfter=12,
+            textColor=text_color,
         ),
         # APA 7 level-2 heading: flush left, bold, own line.
         "Heading2": ParagraphStyle(
             "Heading2",
-            fontName="Times-Bold",
-            fontSize=12,
-            leading=_LEADING,
+            fontName=bold,
+            fontSize=base_size,
+            leading=leading,
             alignment=TA_LEFT,
             spaceBefore=12,
             spaceAfter=6,
+            textColor=text_color,
+        ),
+        # Level 3: flush left, bold italic. Levels 4-5 approximated the
+        # same way (see module-level limitations note) rather than as true
+        # run-in headings.
+        "Heading3": ParagraphStyle(
+            "Heading3",
+            fontName=bold_italic,
+            fontSize=base_size,
+            leading=leading,
+            alignment=TA_LEFT,
+            spaceBefore=10,
+            spaceAfter=6,
+            textColor=text_color,
+        ),
+        "Heading4": ParagraphStyle(
+            "Heading4",
+            fontName=bold,
+            fontSize=base_size,
+            leading=leading,
+            alignment=TA_LEFT,
+            leftIndent=0.5 * inch,
+            spaceBefore=8,
+            spaceAfter=4,
+            textColor=text_color,
+        ),
+        "Heading5": ParagraphStyle(
+            "Heading5",
+            fontName=bold_italic,
+            fontSize=base_size,
+            leading=leading,
+            alignment=TA_LEFT,
+            leftIndent=0.5 * inch,
+            spaceBefore=8,
+            spaceAfter=4,
+            textColor=text_color,
         ),
         "Body": ParagraphStyle(
             "Body",
-            fontName="Times-Roman",
-            fontSize=12,
-            leading=_LEADING,
+            fontName=regular,
+            fontSize=base_size,
+            leading=leading,
             alignment=TA_JUSTIFY,
             firstLineIndent=0.5 * inch,
+            textColor=text_color,
+        ),
+        "BlockQuote": ParagraphStyle(
+            "BlockQuote",
+            fontName=regular,
+            fontSize=base_size,
+            leading=leading,
+            alignment=TA_JUSTIFY,
+            leftIndent=0.5 * inch,
+            rightIndent=0.5 * inch,
+            spaceBefore=6,
+            spaceAfter=6,
+            textColor=text_color,
         ),
         "Bullet": ParagraphStyle(
             "Bullet",
-            fontName="Times-Roman",
-            fontSize=12,
-            leading=_LEADING,
+            fontName=regular,
+            fontSize=base_size,
+            leading=leading,
             alignment=TA_JUSTIFY,
             leftIndent=0.75 * inch,
             firstLineIndent=-0.25 * inch,
             spaceAfter=4,
+            textColor=text_color,
         ),
         "Numbered": ParagraphStyle(
             "Numbered",
-            fontName="Times-Roman",
-            fontSize=12,
-            leading=_LEADING,
+            fontName=regular,
+            fontSize=base_size,
+            leading=leading,
             alignment=TA_JUSTIFY,
             leftIndent=0.75 * inch,
             firstLineIndent=-0.25 * inch,
             spaceAfter=4,
+            textColor=text_color,
         ),
         "Reference": ParagraphStyle(
             "Reference",
-            fontName="Times-Roman",
-            fontSize=12,
-            leading=_LEADING,
+            fontName=regular,
+            fontSize=base_size,
+            leading=leading,
             alignment=TA_LEFT,
             leftIndent=0.5 * inch,
             firstLineIndent=-0.5 * inch,
             spaceAfter=12,
+            textColor=text_color,
+        ),
+        "Caption": ParagraphStyle(
+            "Caption",
+            fontName=italic,
+            fontSize=max(base_size - 2, 8),
+            leading=leading * 0.8,
+            alignment=TA_CENTER,
+            spaceBefore=4,
+            spaceAfter=12,
+            textColor=text_color,
         ),
         "TOCLevel0": ParagraphStyle(
             "TOCLevel0",
-            fontName="Times-Roman",
-            fontSize=12,
-            leading=_LEADING,
+            fontName=regular,
+            fontSize=base_size,
+            leading=leading,
             leftIndent=0,
             firstLineIndent=0,
             spaceAfter=4,
         ),
         "TOCLevel1": ParagraphStyle(
             "TOCLevel1",
-            fontName="Times-Roman",
-            fontSize=12,
-            leading=_LEADING,
+            fontName=regular,
+            fontSize=base_size,
+            leading=leading,
             leftIndent=0.3 * inch,
             firstLineIndent=0,
             spaceAfter=4,
@@ -282,89 +391,327 @@ def _build_styles() -> dict[str, ParagraphStyle]:
     }
 
 
-def _draw_page_number(canvas, doc) -> None:
-    canvas.saveState()
-    canvas.setFont("Times-Roman", 12)
-    page_num = canvas.getPageNumber()
-    canvas.drawRightString(
-        _PAGE_SIZE[0] - _MARGIN, _PAGE_SIZE[1] - 0.75 * inch, str(page_num)
-    )
-    canvas.restoreState()
+def _make_on_page(*, page_size, margins: dict[str, float], background):
+    def _on_page(canvas, doc) -> None:
+        canvas.saveState()
+        if background is not None:
+            canvas.setFillColor(background)
+            canvas.rect(0, 0, page_size[0], page_size[1], fill=1, stroke=0)
+        canvas.setFont("Times-Roman", 12)
+        page_num = canvas.getPageNumber()
+        canvas.setFillColor(colors.black)
+        canvas.drawRightString(
+            page_size[0] - margins["right"],
+            page_size[1] - 0.75 * inch,
+            str(page_num),
+        )
+        canvas.restoreState()
+
+    return _on_page
 
 
-def _inline_markdown(text: str) -> str:
-    escaped = _xml_escape(text)
-    escaped = _BOLD_RE.sub(lambda m: f"<b>{m.group(1)}</b>", escaped)
-    escaped = _UNDERLINE_RE.sub(lambda m: f"<u>{m.group(1)}</u>", escaped)
-    return escaped
+# --- inline rendering (marks) ------------------------------------------------
+
+_MARK_TAG_ORDER = ("bold", "italic", "underline", "strikethrough", "script", "font", "link")
 
 
-def _render_section_content(content: str, styles: dict) -> list:
+def _render_inline(nodes: tuple[DocumentNode, ...]) -> str:
+    """Render a sequence of leaf text nodes into ReportLab mini-markup,
+    honoring their marks (see module docstring for what isn't supported)."""
+    return "".join(_render_leaf(node) for node in nodes)
 
-    elements: list = []
-    lines = content.split("\n")
-    buffer: list[str] = []
-    i = 0
 
-    def flush() -> None:
-        if not buffer:
-            return
-        text = " ".join(s.strip() for s in buffer if s.strip())
-        buffer.clear()
-        if text:
-            elements.append(Paragraph(_inline_markdown(text), styles["Body"]))
+def _render_leaf(node: DocumentNode) -> str:
+    if node.text is None:
+        raise DocumentBuildError(
+            f"Expected a leaf text node, got block '{node.type}'."
+        )
+    chunk = _xml_escape(node.text)
 
-    while i < len(lines):
-        line = lines[i].strip()
+    by_type = {m.type: m.value for m in node.marks}
 
-        if not line:
-            flush()
-            i += 1
-            continue
+    if "code" in by_type:
+        chunk = f'<font face="Courier">{chunk}</font>'
+    font_attrs = ""
+    if "color" in by_type:
+        font_attrs += f' color="{_xml_escape(str(by_type["color"]))}"'
+    if "fontSize" in by_type:
+        size_pt = _parse_length(by_type["fontSize"], default=None)
+        if size_pt:
+            font_attrs += f' size="{size_pt:g}"'
+    if "fontFamily" in by_type:
+        regular, *_ = _resolve_font_family(str(by_type["fontFamily"]))
+        font_attrs += f' face="{regular}"'
+    if font_attrs:
+        chunk = f"<font{font_attrs}>{chunk}</font>"
 
-        if line.startswith(SUBHEADING_TOKEN):
-            flush()
-            heading = line[len(SUBHEADING_TOKEN) :].strip()
-            elements.append(
-                Paragraph(_inline_markdown(heading), styles["Heading2"])
+    if "script" in by_type:
+        tag = "super" if by_type["script"] == "superscript" else "sub"
+        chunk = f"<{tag}>{chunk}</{tag}>"
+    if "strikethrough" in by_type:
+        chunk = f"<strike>{chunk}</strike>"
+    if "underline" in by_type:
+        chunk = f"<u>{chunk}</u>"
+    if "italic" in by_type:
+        chunk = f"<i>{chunk}</i>"
+    if "bold" in by_type:
+        chunk = f"<b>{chunk}</b>"
+    if "link" in by_type:
+        url = _xml_escape(str(by_type["link"].get("url", "")))
+        chunk = f'<link href="{url}">{chunk}</link>'
+    # "highlight" has no ReportLab equivalent — intentionally not rendered.
+
+    return chunk
+
+
+# --- block rendering ----------------------------------------------------
+
+_HEADING_STYLE_NAMES = {
+    HEADING_2: "Heading2",
+    HEADING_3: "Heading3",
+    HEADING_4: "Heading4",
+    HEADING_5: "Heading5",
+}
+
+
+def _render_block(node: DocumentNode, styles: dict, content_width: float) -> list:
+    if node.type in _HEADING_STYLE_NAMES:
+        base = styles[_HEADING_STYLE_NAMES[node.type]]
+        style = _apply_block_style(base, node.styles)
+        return [Paragraph(_render_inline(node.children), style)]
+
+    if node.type == PARAGRAPH:
+        style = _apply_block_style(styles["Body"], node.styles)
+        paragraph = Paragraph(_render_inline(node.children), style)
+        return _wrap_with_box(paragraph, node.styles, content_width)
+
+    if node.type == BLOCK_QUOTE:
+        style = _apply_block_style(styles["BlockQuote"], node.styles)
+        paragraph = Paragraph(_render_inline(node.children), style)
+        return _wrap_with_box(paragraph, node.styles, content_width)
+
+    if node.type == BULLETED_LIST:
+        style = _apply_block_style(styles["Bullet"], node.styles)
+        return [
+            Paragraph(f"•  {_render_inline(item.children)}", style)
+            for item in node.children
+        ]
+
+    if node.type == NUMBERED_LIST:
+        style = _apply_block_style(styles["Numbered"], node.styles)
+        return [
+            Paragraph(f"{i}.  {_render_inline(item.children)}", style)
+            for i, item in enumerate(node.children, start=1)
+        ]
+
+    if node.type == IMAGE:
+        return _render_image(node, styles, content_width)
+
+    raise DocumentBuildError(f"Unsupported block node in section: '{node.type}'")
+
+
+def _apply_block_style(base: ParagraphStyle, node_styles: dict) -> ParagraphStyle:
+    if not node_styles:
+        return base
+
+    overrides: dict = {}
+    if "textAlign" in node_styles:
+        align = _ALIGN_MAP.get(str(node_styles["textAlign"]).lower())
+        if align is not None:
+            overrides["alignment"] = align
+    if "textIndent" in node_styles:
+        value = _parse_length(node_styles["textIndent"], default=None)
+        if value is not None:
+            overrides["firstLineIndent"] = value
+    if "marginTop" in node_styles:
+        value = _parse_length(node_styles["marginTop"], default=None)
+        if value is not None:
+            overrides["spaceBefore"] = value
+    if "marginBottom" in node_styles:
+        value = _parse_length(node_styles["marginBottom"], default=None)
+        if value is not None:
+            overrides["spaceAfter"] = value
+    if "marginLeft" in node_styles:
+        value = _parse_length(node_styles["marginLeft"], default=None)
+        if value is not None:
+            overrides["leftIndent"] = value
+    if "marginRight" in node_styles:
+        value = _parse_length(node_styles["marginRight"], default=None)
+        if value is not None:
+            overrides["rightIndent"] = value
+    if "lineHeight" in node_styles:
+        factor = _coerce_float(node_styles["lineHeight"], default=None)
+        if factor is not None:
+            overrides["leading"] = base.fontSize * factor
+
+    if not overrides:
+        return base
+    return ParagraphStyle(f"{base.name}-override-{id(node_styles)}", parent=base, **overrides)
+
+
+def _wrap_with_box(paragraph: Paragraph, node_styles: dict, content_width: float) -> list:
+    """Best-effort approximation of block background/border via a
+    single-cell Table — ReportLab paragraphs have no native background."""
+    bg = node_styles.get("backgroundColor")
+    border_left = node_styles.get("borderLeft")
+    if not bg and not border_left:
+        return [paragraph]
+
+    commands = [
+        ("LEFTPADDING", (0, 0), (-1, -1), _parse_length(node_styles.get("paddingLeft"), default=6)),
+        ("RIGHTPADDING", (0, 0), (-1, -1), _parse_length(node_styles.get("paddingRight"), default=6)),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]
+    if bg:
+        color = _parse_color(bg, default=None)
+        if color is not None:
+            commands.append(("BACKGROUND", (0, 0), (-1, -1), color))
+    if border_left:
+        width_pt, color = _parse_border(border_left)
+        if color is not None:
+            commands.append(("LINEBEFORE", (0, 0), (-1, -1), width_pt, color))
+
+    table = Table([[paragraph]], colWidths=[content_width])
+    table.setStyle(TableStyle(commands))
+    return [table]
+
+
+def _render_image(node: DocumentNode, styles: dict, content_width: float) -> list:
+    try:
+        image_bytes = _fetch_image_bytes(node.src)
+        reader = ImageReader(BytesIO(image_bytes))
+        natural_w, natural_h = reader.getSize()
+    except Exception:
+        placeholder = node.alt or node.caption or node.src or "image"
+        return [
+            Paragraph(
+                f"[Image unavailable: {_xml_escape(placeholder)}]",
+                styles["Caption"],
             )
-            i += 1
-            continue
+        ]
 
-        bullet_match = _BULLET_RE.match(line)
-        if bullet_match:
-            flush()
-            while i < len(lines) and _BULLET_RE.match(lines[i].strip()):
-                item_text = _BULLET_RE.match(lines[i].strip()).group(1)
-                elements.append(
-                    Paragraph(
-                        f"•  {_inline_markdown(item_text)}", styles["Bullet"]
-                    )
-                )
-                i += 1
-            continue
+    width = _resolve_dimension(
+        node.styles.get("width"), content_width, default=content_width
+    )
+    height = width * (natural_h / natural_w) if natural_w else None
 
-        numbered_match = _NUMBERED_RE.match(line)
-        if numbered_match:
-            flush()
-            n = 1
-            while i < len(lines) and _NUMBERED_RE.match(lines[i].strip()):
-                item_text = _NUMBERED_RE.match(lines[i].strip()).group(1)
-                elements.append(
-                    Paragraph(
-                        f"{n}.  {_inline_markdown(item_text)}",
-                        styles["Numbered"],
-                    )
-                )
-                n += 1
-                i += 1
-            continue
+    align = str(node.styles.get("alignment", "center")).upper()
+    h_align = align if align in ("LEFT", "CENTER", "RIGHT") else "CENTER"
 
-        buffer.append(line)
-        i += 1
-
-    flush()
+    elements: list = [
+        Image(BytesIO(image_bytes), width=width, height=height, hAlign=h_align)
+    ]
+    if node.caption:
+        elements.append(Paragraph(_xml_escape(node.caption), styles["Caption"]))
     return elements
+
+
+def _fetch_image_bytes(src: str | None) -> bytes:
+    if not src:
+        raise DocumentBuildError("Image node has no 'src'.")
+    with urlopen(src, timeout=10) as response:  # noqa: S310 - trusted, app-inserted URLs
+        return response.read()
+
+
+# --- small parsing helpers ------------------------------------------------
+
+
+def _resolve_page_size(doc_styles: dict) -> tuple[float, float]:
+    raw = doc_styles.get("pageSize", "letter")
+    if isinstance(raw, dict):
+        width = _parse_length(raw.get("width"), default=letter[0]) or letter[0]
+        height = _parse_length(raw.get("height"), default=letter[1]) or letter[1]
+    else:
+        width, height = _PAGE_SIZES.get(str(raw).lower(), letter)
+
+    landscape = str(doc_styles.get("orientation", "portrait")).lower() == "landscape"
+    narrow, wide = min(width, height), max(width, height)
+    return (wide, narrow) if landscape else (narrow, wide)
+
+
+def _resolve_margins(doc_styles: dict) -> dict[str, float]:
+    raw = doc_styles.get("pageMargin", "1in")
+    default = _parse_length("1in", default=inch) or inch
+    if isinstance(raw, dict):
+        return {
+            side: _parse_length(raw.get(side), default=default) or default
+            for side in ("top", "bottom", "left", "right")
+        }
+    value = _parse_length(raw, default=default) or default
+    return {"top": value, "bottom": value, "left": value, "right": value}
+
+
+def _resolve_font_family(name: str | None) -> tuple[str, str, str, str]:
+    if not name:
+        return _FONT_FAMILIES["times new roman"]
+    key = name.split(",")[0].strip().strip('"').lower()
+    return _FONT_FAMILIES.get(key, _FONT_FAMILIES["times new roman"])
+
+
+def _resolve_dimension(value, content_width: float, *, default: float) -> float:
+    if value is None:
+        return default
+    text = str(value).strip()
+    if text.endswith("%"):
+        try:
+            pct = float(text[:-1]) / 100.0
+        except ValueError:
+            return default
+        return content_width * pct
+    return _parse_length(text, default=default) or default
+
+
+def _parse_length(value, *, default):
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().lower()
+    try:
+        if text.endswith("in"):
+            return float(text[:-2]) * inch
+        if text.endswith("pt"):
+            return float(text[:-2])
+        if text.endswith("px"):
+            return float(text[:-2]) * 0.75  # 96dpi assumption
+        if text.endswith("cm"):
+            return float(text[:-2]) * 28.3465
+        if text.endswith("mm"):
+            return float(text[:-2]) * 2.83465
+        return float(text)
+    except ValueError:
+        return default
+
+
+def _parse_color(value, *, default):
+    if not value:
+        return default
+    try:
+        return colors.HexColor(str(value))
+    except Exception:
+        return default
+
+
+def _parse_border(value: str) -> tuple[float, "colors.Color | None"]:
+    width_pt = 1.0
+    color = None
+    for part in str(value).split():
+        if re.match(r"^[\d.]+(px|pt|in)$", part):
+            width_pt = _parse_length(part, default=width_pt) or width_pt
+        elif part.startswith("#") or part.isalpha():
+            parsed = _parse_color(part, default=None)
+            if parsed is not None:
+                color = parsed
+    return width_pt, color
+
+
+def _coerce_float(value, *, default):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _safe_filename(title: str) -> str:
