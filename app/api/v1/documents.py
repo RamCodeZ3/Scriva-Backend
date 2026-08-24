@@ -11,7 +11,12 @@ from domain.value_objects.apa_structure import (
     APASection,
     APASectionType,
 )
-from domain.value_objects.document_node import HEADING_1, IMAGE, DocumentNode, Mark
+from domain.value_objects.document_node import (
+    HEADING_1,
+    IMAGE,
+    DocumentNode,
+    Mark,
+)
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 
@@ -61,7 +66,6 @@ from api.schemas.documents import (
     DocumentNodeOut,
     DocumentPatchResponse,
     DocumentStylesOut,
-    ExportDocumentRequest,
     ExportDocumentResponse,
     MarkOut,
     PresentationOut,
@@ -71,6 +75,7 @@ from api.schemas.documents import (
 )
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
+
 
 @router.post("/", response_model=DocumentResponse)
 async def create_document(
@@ -119,33 +124,37 @@ async def create_document(
         sources_error=_sources_error_out(result),
         source_ids=[str(sid) for sid in result.source_ids],
         created_at=result.created_at.isoformat(),
-        updated_at=result.updated_at.isoformat()
+        updated_at=result.updated_at.isoformat(),
     )
 
 
-@router.post("/export/", response_model=ExportDocumentResponse)
+@router.post(
+    "/{document_id}/export/{type_export}",
+    response_model=ExportDocumentResponse,
+)
 async def export_document(
-    body: ExportDocumentRequest,
+    document_id: UUID,
+    type_export: str,
     current_user: User = Depends(get_current_user),
     use_case: ExportDocumentUseCase = Depends(get_export_document_use_case),
 ) -> ExportDocumentResponse:
     try:
-        document_id = UUID(body.document_id)
+        pass
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid document_id '{body.document_id}': {exc}",
+            detail=f"Invalid document_id '{document_id}': {exc}",
         ) from exc
 
     data = ExportDocumentInput(
-        document_id=document_id, user_id=current_user.id, export=body.export
+        document_id=document_id, user_id=current_user.id, export=type_export
     )
     result = await use_case.execute(data)
 
     return ExportDocumentResponse(
         status="exported",
-        document_id=body.document_id,
-        export=body.export,
+        document_id=str(document_id),
+        export=type_export,
         url=result.url,
         file_base64=(
             base64.b64encode(result.file_bytes).decode("ascii")
@@ -320,7 +329,10 @@ def _title_snippet(body: CreateDocumentRequest) -> str:
 def _styles_out(result) -> DocumentStylesOut:
     # `result` is whatever DTO the use case returns; if it doesn't carry
     # `document_styles` yet, fall back to the fixed APA7 defaults.
-    styles = {**APA7_DOCUMENT_STYLES, **(getattr(result, "document_styles", None) or {})}
+    styles = {
+        **APA7_DOCUMENT_STYLES,
+        **(getattr(result, "document_styles", None) or {}),
+    }
     return DocumentStylesOut(**styles)
 
 
@@ -369,7 +381,9 @@ def _nodes_out(sections: list[APASection]) -> list[DocumentNodeOut]:
 
 def _node_from_out(node: DocumentNodeOut) -> DocumentNode:
     if node.text is not None:
-        marks = tuple(Mark(type=m.type, value=m.value) for m in (node.marks or ()))
+        marks = tuple(
+            Mark(type=m.type, value=m.value) for m in (node.marks or ())
+        )
         return DocumentNode(text=node.text, marks=marks)
 
     if node.type == IMAGE:

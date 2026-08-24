@@ -28,7 +28,10 @@ from reportlab.platypus.tableofcontents import TableOfContents
 
 from domain.entities.document import Document
 from domain.exceptions import DocumentBuildError
-from domain.value_objects.apa_structure import APA7_DOCUMENT_STYLES, APASectionType
+from domain.value_objects.apa_structure import (
+    APA7_DOCUMENT_STYLES,
+    APASectionType,
+)
 from domain.value_objects.document_node import (
     BLOCK_QUOTE,
     BULLETED_LIST,
@@ -54,14 +57,44 @@ _ALIGN_MAP = {
     "justify": TA_JUSTIFY,
 }
 _FONT_FAMILIES = {
-    "times new roman": ("Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic"),
+    "times new roman": (
+        "Times-Roman",
+        "Times-Bold",
+        "Times-Italic",
+        "Times-BoldItalic",
+    ),
     "times": ("Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic"),
     "serif": ("Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic"),
-    "arial": ("Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique"),
-    "helvetica": ("Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique"),
-    "sans-serif": ("Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique"),
-    "courier": ("Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique"),
-    "monospace": ("Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique"),
+    "arial": (
+        "Helvetica",
+        "Helvetica-Bold",
+        "Helvetica-Oblique",
+        "Helvetica-BoldOblique",
+    ),
+    "helvetica": (
+        "Helvetica",
+        "Helvetica-Bold",
+        "Helvetica-Oblique",
+        "Helvetica-BoldOblique",
+    ),
+    "sans-serif": (
+        "Helvetica",
+        "Helvetica-Bold",
+        "Helvetica-Oblique",
+        "Helvetica-BoldOblique",
+    ),
+    "courier": (
+        "Courier",
+        "Courier-Bold",
+        "Courier-Oblique",
+        "Courier-BoldOblique",
+    ),
+    "monospace": (
+        "Courier",
+        "Courier-Bold",
+        "Courier-Oblique",
+        "Courier-BoldOblique",
+    ),
 }
 
 
@@ -91,7 +124,10 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         )
 
     def _build_sync(self, document: Document) -> bytes:
-        doc_styles = {**APA7_DOCUMENT_STYLES, **(document.document_styles or {})}
+        doc_styles = {
+            **APA7_DOCUMENT_STYLES,
+            **(document.document_styles or {}),
+        }
         page_size = _resolve_page_size(doc_styles)
         margins = _resolve_margins(doc_styles)
         content_width = page_size[0] - margins["left"] - margins["right"]
@@ -117,9 +153,13 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         on_page = _make_on_page(
             page_size=page_size,
             margins=margins,
-            background=_parse_color(doc_styles.get("backgroundColor"), default=None),
+            background=_parse_color(
+                doc_styles.get("backgroundColor"), default=None
+            ),
         )
-        doc.addPageTemplates([PageTemplate(id="all", frames=[frame], onPage=on_page)])
+        doc.addPageTemplates(
+            [PageTemplate(id="all", frames=[frame], onPage=on_page)]
+        )
 
         story: list = []
         story += self._build_cover_page(document, styles)
@@ -132,7 +172,9 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
             APASectionType.BODY,
             APASectionType.CONCLUSION,
         ):
-            story += self._build_section(document, section_type, styles, content_width)
+            story += self._build_section(
+                document, section_type, styles, content_width
+            )
 
         story.append(PageBreak())
         story += self._build_references(document, styles)
@@ -143,7 +185,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         return buffer.getvalue()
 
     def _build_cover_page(self, document: Document, styles: dict) -> list:
-       
+
         p = document.presentation
 
         lines = [
@@ -205,7 +247,9 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
             document.sources, key=lambda r: (r.author or "").lower()
         ):
             elements.append(
-                Paragraph(_xml_escape(ref.to_apa_string()), styles["Reference"])
+                Paragraph(
+                    _xml_escape(ref.to_apa_string()), styles["Reference"]
+                )
             )
         if not document.sources:
             elements.append(
@@ -412,7 +456,15 @@ def _make_on_page(*, page_size, margins: dict[str, float], background):
 
 # --- inline rendering (marks) ------------------------------------------------
 
-_MARK_TAG_ORDER = ("bold", "italic", "underline", "strikethrough", "script", "font", "link")
+_MARK_TAG_ORDER = (
+    "bold",
+    "italic",
+    "underline",
+    "strikethrough",
+    "script",
+    "font",
+    "link",
+)
 
 
 def _render_inline(nodes: tuple[DocumentNode, ...]) -> str:
@@ -474,7 +526,9 @@ _HEADING_STYLE_NAMES = {
 }
 
 
-def _render_block(node: DocumentNode, styles: dict, content_width: float) -> list:
+def _render_block(
+    node: DocumentNode, styles: dict, content_width: float
+) -> list:
     if node.type in _HEADING_STYLE_NAMES:
         base = styles[_HEADING_STYLE_NAMES[node.type]]
         style = _apply_block_style(base, node.styles)
@@ -507,10 +561,14 @@ def _render_block(node: DocumentNode, styles: dict, content_width: float) -> lis
     if node.type == IMAGE:
         return _render_image(node, styles, content_width)
 
-    raise DocumentBuildError(f"Unsupported block node in section: '{node.type}'")
+    raise DocumentBuildError(
+        f"Unsupported block node in section: '{node.type}'"
+    )
 
 
-def _apply_block_style(base: ParagraphStyle, node_styles: dict) -> ParagraphStyle:
+def _apply_block_style(
+    base: ParagraphStyle, node_styles: dict
+) -> ParagraphStyle:
     if not node_styles:
         return base
 
@@ -546,10 +604,14 @@ def _apply_block_style(base: ParagraphStyle, node_styles: dict) -> ParagraphStyl
 
     if not overrides:
         return base
-    return ParagraphStyle(f"{base.name}-override-{id(node_styles)}", parent=base, **overrides)
+    return ParagraphStyle(
+        f"{base.name}-override-{id(node_styles)}", parent=base, **overrides
+    )
 
 
-def _wrap_with_box(paragraph: Paragraph, node_styles: dict, content_width: float) -> list:
+def _wrap_with_box(
+    paragraph: Paragraph, node_styles: dict, content_width: float
+) -> list:
     """Best-effort approximation of block background/border via a
     single-cell Table — ReportLab paragraphs have no native background."""
     bg = node_styles.get("backgroundColor")
@@ -558,8 +620,18 @@ def _wrap_with_box(paragraph: Paragraph, node_styles: dict, content_width: float
         return [paragraph]
 
     commands = [
-        ("LEFTPADDING", (0, 0), (-1, -1), _parse_length(node_styles.get("paddingLeft"), default=6)),
-        ("RIGHTPADDING", (0, 0), (-1, -1), _parse_length(node_styles.get("paddingRight"), default=6)),
+        (
+            "LEFTPADDING",
+            (0, 0),
+            (-1, -1),
+            _parse_length(node_styles.get("paddingLeft"), default=6),
+        ),
+        (
+            "RIGHTPADDING",
+            (0, 0),
+            (-1, -1),
+            _parse_length(node_styles.get("paddingRight"), default=6),
+        ),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -578,7 +650,9 @@ def _wrap_with_box(paragraph: Paragraph, node_styles: dict, content_width: float
     return [table]
 
 
-def _render_image(node: DocumentNode, styles: dict, content_width: float) -> list:
+def _render_image(
+    node: DocumentNode, styles: dict, content_width: float
+) -> list:
     try:
         image_bytes = _fetch_image_bytes(node.src)
         reader = ImageReader(BytesIO(image_bytes))
@@ -604,7 +678,9 @@ def _render_image(node: DocumentNode, styles: dict, content_width: float) -> lis
         Image(BytesIO(image_bytes), width=width, height=height, hAlign=h_align)
     ]
     if node.caption:
-        elements.append(Paragraph(_xml_escape(node.caption), styles["Caption"]))
+        elements.append(
+            Paragraph(_xml_escape(node.caption), styles["Caption"])
+        )
     return elements
 
 
@@ -622,11 +698,15 @@ def _resolve_page_size(doc_styles: dict) -> tuple[float, float]:
     raw = doc_styles.get("pageSize", "letter")
     if isinstance(raw, dict):
         width = _parse_length(raw.get("width"), default=letter[0]) or letter[0]
-        height = _parse_length(raw.get("height"), default=letter[1]) or letter[1]
+        height = (
+            _parse_length(raw.get("height"), default=letter[1]) or letter[1]
+        )
     else:
         width, height = _PAGE_SIZES.get(str(raw).lower(), letter)
 
-    landscape = str(doc_styles.get("orientation", "portrait")).lower() == "landscape"
+    landscape = (
+        str(doc_styles.get("orientation", "portrait")).lower() == "landscape"
+    )
     narrow, wide = min(width, height), max(width, height)
     return (wide, narrow) if landscape else (narrow, wide)
 
@@ -650,7 +730,9 @@ def _resolve_font_family(name: str | None) -> tuple[str, str, str, str]:
     return _FONT_FAMILIES.get(key, _FONT_FAMILIES["times new roman"])
 
 
-def _resolve_dimension(value, content_width: float, *, default: float) -> float:
+def _resolve_dimension(
+    value, content_width: float, *, default: float
+) -> float:
     if value is None:
         return default
     text = str(value).strip()

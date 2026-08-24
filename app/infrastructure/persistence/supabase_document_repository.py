@@ -170,7 +170,7 @@ def _json_default(obj):
 
 
 def _section_to_dict(section: APASection) -> dict:
-   return {
+    return {
         "section_type": section.section_type.value,
         "heading": section.heading.to_dict(),
         "body_nodes": [n.to_dict() for n in section.body_nodes],

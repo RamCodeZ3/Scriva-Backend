@@ -22,7 +22,7 @@ class SourceErrorOutput:
 
 
 def build_source_errors(raw_sources: list[Source]) -> list[SourceErrorOutput]:
-      return [
+    return [
         SourceErrorOutput(
             source_id=s.id,
             raw=s.raw,

@@ -62,7 +62,14 @@ _VALID_MARK_TYPES = frozenset(
 )
 # These marks are meaningless without a 'value' (a color, a size, a URL...).
 _MARKS_REQUIRING_VALUE = frozenset(
-    {MARK_SCRIPT, MARK_COLOR, MARK_HIGHLIGHT, MARK_FONT_FAMILY, MARK_FONT_SIZE, MARK_LINK}
+    {
+        MARK_SCRIPT,
+        MARK_COLOR,
+        MARK_HIGHLIGHT,
+        MARK_FONT_FAMILY,
+        MARK_FONT_SIZE,
+        MARK_LINK,
+    }
 )
 _SCRIPT_VALUES = frozenset({"superscript", "subscript"})
 
@@ -220,9 +227,13 @@ class DocumentNode:
         return out
 
     @classmethod
-    def from_dict(cls, data: Any, *, assign_ids: bool = True) -> "DocumentNode":
+    def from_dict(
+        cls, data: Any, *, assign_ids: bool = True
+    ) -> "DocumentNode":
         if not isinstance(data, dict):
-            raise DocumentBuildError(f"Node must be a JSON object, got: {data!r}")
+            raise DocumentBuildError(
+                f"Node must be a JSON object, got: {data!r}"
+            )
 
         if "text" in data:
             text = data["text"]
@@ -274,7 +285,9 @@ def text_node(
 ) -> DocumentNode:
     resolved: tuple[Mark, ...] = ()
     if marks:
-        resolved = tuple(m if isinstance(m, Mark) else Mark(type=m) for m in marks)
+        resolved = tuple(
+            m if isinstance(m, Mark) else Mark(type=m) for m in marks
+        )
     return DocumentNode(text=text, marks=resolved)
 
 

@@ -50,7 +50,7 @@ _NODE_SCHEMA_RULES = (
     "subtopics but are rarely needed — do not use them just to vary "
     "appearance.\n"
     f'  - {{"type": "{BLOCK_QUOTE}", "children": [ PARAGRAPH-like TEXT '
-    'children ]}} — ONLY for a direct quotation of 40+ words per APA 7 '
+    "children ]}} — ONLY for a direct quotation of 40+ words per APA 7 "
     "(shorter quotes stay inline inside a normal paragraph, in quotation "
     "marks).\n"
     f'  - {{"type": "{BULLETED_LIST}", "children": [ LIST_ITEM, ... ]}} — '
@@ -63,7 +63,7 @@ _NODE_SCHEMA_RULES = (
     'useful, {"text": "...", "marks": [ MARK, ... ]}. Each MARK is an '
     'object {"type": "bold"} or {"type": "color", "value": "#d93025"}. '
     "Valid mark types: 'bold', 'italic', 'underline', 'strikethrough' (no "
-    "value needed); 'script' (value: \"superscript\" or \"subscript\"); "
+    'value needed); \'script\' (value: "superscript" or "subscript"); '
     "'color' / 'highlight' (value: a hex color string); 'link' (value: "
     '{"url": "..."}) — only when the source material names a URL to '
     "cite inline. Use marks sparingly, never on whole sentences, never "

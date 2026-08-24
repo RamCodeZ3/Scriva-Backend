@@ -61,7 +61,6 @@ class DocumentStylesOut(BaseModel):
     lineHeight: float = 2.0
 
 
-
 class DocumentResponse(BaseModel):
     id: str
     title: str
@@ -115,11 +114,6 @@ class DeleteDocumentResponse(BaseModel):
 class AugmentDocumentRequest(BaseModel):
     sources: list[str] = Field(..., min_length=1)
     additional_notes: str | None = None
-
-
-class ExportDocumentRequest(BaseModel):
-    document_id: str
-    export: str
 
 
 class ExportDocumentResponse(BaseModel):
