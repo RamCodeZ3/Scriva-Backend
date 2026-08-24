@@ -2,19 +2,30 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace as _with_replaced
 
 from google import genai
 from google.genai import types
 
 from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import APASection, APASectionType
+from domain.value_objects.document_node import (
+    BLOCK_QUOTE,
+    BULLETED_LIST,
+    HEADING_1,
+    HEADING_2,
+    IMAGE,
+    LIST_ITEM,
+    NUMBERED_LIST,
+    PARAGRAPH,
+    DocumentNode,
+    text_node,
+)
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
 
 from application.ports.document_writer_port import DocumentWriterPort
-
-_SUBHEADING_TOKEN = "## "
 
 _SECTION_ORDER = [
     APASectionType.PRESENTATION,
@@ -25,36 +36,58 @@ _SECTION_ORDER = [
     APASectionType.SOURCES,
 ]
 
-_FORMAT_RULES = (
-    "CRITICAL OUTPUT RULES — the renderer interprets a small, specific "
-    "subset of Markdown and nothing else. Anything outside this subset "
-    "breaks formatting, so follow these exactly:\n"
-    "1. Write in normal academic prose, in full sentences and paragraphs. "
-    "Do NOT use '#', '###', backticks, single-asterisk/underscore italics, "
-    "or any Markdown beyond what is explicitly allowed in rules 2-4 below.\n"
-    "2. Subtopic headings: when starting a new subtopic inside 'body' "
-    "(rarely elsewhere), put that heading alone on its own line, prefixed "
-    f"with exactly '{_SUBHEADING_TOKEN}' and nothing else on that line. "
-    "Use this sparingly, only for genuine subtopic breaks.\n"
-    "3. Emphasis: you may use **bold** for key terms and __underline__ for "
-    "titles or terms that require underlining, but only where it is "
-    "genuinely useful. Never bold or underline whole sentences, and do not "
-    "overuse either.\n"
-    "4. Lists: you may use a bullet list (lines starting with '- ') or a "
-    "numbered list (lines starting with '1. ', '2. ', etc.), following "
-    "APA 7 rules: use bullets ONLY when the items have no meaningful order, "
-    "priority, or hierarchy among them (equivalent characteristics, "
-    "examples, parallel items); use numbers when the items follow a "
-    "sequence of steps, a chronology, or a ranked hierarchy. Every item in "
-    "a list must be grammatically parallel with the others (all full "
-    "sentences, or all short fragments — not mixed). Lists are the "
-    "exception, not the default — most content should stay in ordinary "
-    "prose paragraphs, and you should not reach for a list unless the "
-    "content is genuinely list-like.\n"
-    "5. Paragraphs: keep paragraphs short and centered on a single idea. "
-    "Never merge several distinct ideas into one long paragraph — split "
-    "them into separate, focused paragraphs instead.\n"
-    "6. Titles (document title and every section title) must be short, "
+_NODE_SCHEMA_RULES = (
+    "CRITICAL OUTPUT RULES — the renderer understands ONLY a small, "
+    "specific tree of JSON node objects. NO Markdown anywhere. Each "
+    "section's 'nodes' array is a list of BLOCK nodes. Each block node is "
+    "one of:\n"
+    f'  - {{"type": "{PARAGRAPH}", "children": [ TEXT, ... ]}} — normal '
+    "academic prose, one idea per paragraph.\n"
+    f'  - {{"type": "{HEADING_2}", "children": [ TEXT ]}} — a subtopic '
+    "heading, used sparingly and mostly inside 'body' for genuine subtopic "
+    f"breaks. Never inside 'presentation' or 'index'. Deeper levels "
+    f'("heading-3", "heading-4", "heading-5") exist for genuinely nested '
+    "subtopics but are rarely needed — do not use them just to vary "
+    "appearance.\n"
+    f'  - {{"type": "{BLOCK_QUOTE}", "children": [ PARAGRAPH-like TEXT '
+    "children ]}} — ONLY for a direct quotation of 40+ words per APA 7 "
+    "(shorter quotes stay inline inside a normal paragraph, in quotation "
+    "marks).\n"
+    f'  - {{"type": "{BULLETED_LIST}", "children": [ LIST_ITEM, ... ]}} — '
+    "use ONLY when items have no meaningful order (parallel examples, "
+    "equivalent characteristics).\n"
+    f'  - {{"type": "{NUMBERED_LIST}", "children": [ LIST_ITEM, ... ]}} — '
+    "use when items are steps, a chronology, or a ranked hierarchy.\n"
+    f'  A LIST_ITEM is {{"type": "{LIST_ITEM}", "children": [ TEXT, ... ]}}.\n'
+    '  A TEXT node is a leaf: {"text": "..."} or, when a mark is genuinely '
+    'useful, {"text": "...", "marks": [ MARK, ... ]}. Each MARK is an '
+    'object {"type": "bold"} or {"type": "color", "value": "#d93025"}. '
+    "Valid mark types: 'bold', 'italic', 'underline', 'strikethrough' (no "
+    'value needed); \'script\' (value: "superscript" or "subscript"); '
+    "'color' / 'highlight' (value: a hex color string); 'link' (value: "
+    '{"url": "..."}) — only when the source material names a URL to '
+    "cite inline. Use marks sparingly, never on whole sentences, never "
+    "invented decoration.\n"
+    "  Block nodes ('paragraph', 'heading-N', 'block-quote', the two list "
+    "types) may optionally carry a 'styles' object (textAlign, "
+    "textIndent, marginTop/Bottom/Left/Right, lineHeight, "
+    "backgroundColor, borderLeft, etc.) — but leave 'styles' OUT entirely "
+    "unless the user's additional notes explicitly ask for particular "
+    "visual formatting. The default APA 7 look (no custom styles) is "
+    "correct for the overwhelming majority of requests.\n"
+    '  NEVER output a node with "type": "image". You have no way to '
+    "produce a real, working file URL, so an invented 'src' would be a "
+    "broken link — images are inserted by the application separately, "
+    "after your text is generated.\n"
+    "Rules that still apply regardless of node type:\n"
+    "- Lists are the exception, not the default: most content must be "
+    "'paragraph' nodes. Every item in a list must be grammatically "
+    "parallel with the others (all full sentences, or all short "
+    "fragments — not mixed).\n"
+    "- Keep paragraphs short and centered on a single idea; never merge "
+    "several distinct ideas into one 'paragraph' node — split them into "
+    "separate paragraph nodes instead.\n"
+    "- Titles (document title and every section title) must be short, "
     "original, in your own words, in the source's language, NEVER a URL, "
     "NEVER copied verbatim from source text, at most ~12 words."
 )
@@ -62,46 +95,52 @@ _FORMAT_RULES = (
 _SYSTEM_INSTRUCTION = (
     "You are an academic writing assistant. You write complete, well "
     "structured documents strictly following APA 7 formatting rules, in "
-    "the same language as the source content.\n\n"
-    f"{_FORMAT_RULES}\n"
+    "the same language as the source content, as a JSON node tree instead "
+    "of Markdown.\n\n"
+    f"{_NODE_SCHEMA_RULES}\n"
     "7. If the user's additional notes contain a questionnaire (a list of "
     "questions to answer), address every question explicitly and "
     "completely inside 'body', while still producing all six required "
     "sections normally.\n"
     "8. The 'presentation' section is REQUIRED and must exist, but it is "
-    "NOT a summary or abstract of the document's topic. Its 'content' must "
+    "NOT a summary or abstract of the document's topic. Its 'nodes' must "
     "restate ONLY the structured presentation data given to you below — "
     "student name, institution, subject/course, professor, student ID (if "
-    "provided), and today's date — each on its own line, in the source's "
-    "language, exactly as given. Do NOT add a summary of what the document "
-    "is about, do NOT add any sentence that isn't one of those fields, and "
-    "do NOT omit any of the fields that were provided to you.\n"
+    "provided), and today's date — as separate 'paragraph' nodes (one "
+    "field per paragraph), in the source's language, exactly as given. Do "
+    "NOT add a summary of what the document is about, do NOT add a field "
+    "that wasn't provided to you, and do NOT omit any field that was.\n"
     "9. The 'index' section is a short plain-language outline of what each "
-    "section covers, written as prose or a simple list of section names — "
-    "NEVER invent page numbers, since you have no way of knowing how the "
-    "final document will paginate. The renderer builds the authoritative, "
-    "paginated table of contents separately from the real headings; treat "
-    "this section only as a narrative overview.\n"
+    "section covers, as 'paragraph' nodes or a simple list — NEVER invent "
+    "page numbers, since you have no way of knowing how the final document "
+    "will paginate. The renderer builds the authoritative, paginated table "
+    "of contents separately from the real headings; treat this section "
+    "only as a narrative overview.\n"
+    "10. If the user's additional notes explicitly request custom "
+    "visual formatting (a specific color, alignment, emphasis, a "
+    "highlighted term, a quote box, etc.), honor it using 'styles' on the "
+    "relevant block node(s) and/or 'marks' on the relevant text — but "
+    "only for what was actually requested, nothing more.\n"
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
 )
 
 _AUGMENT_SYSTEM_INSTRUCTION = (
     "You are an academic writing assistant. You update an EXISTING APA 7 "
-    "document with new source material, deciding per-section whether it "
-    "needs to change.\n\n"
-    f"{_FORMAT_RULES}\n"
+    "document (stored as a JSON node tree, not Markdown) with new source "
+    "material, deciding per-section whether it needs to change.\n\n"
+    f"{_NODE_SCHEMA_RULES}\n"
     "7. For every section, decide: if the new material doesn't affect it, "
     'return it with "unchanged": true and nothing else — do NOT repeat '
-    "its old text, that wastes tokens. If it does, return the FULL updated "
-    "'title' and 'content' for that section.\n"
+    "its old nodes, that wastes tokens. If it does, return the FULL "
+    "updated 'title' and 'nodes' for that section.\n"
     "8. If the new material is a genuinely new subtopic not covered yet in "
-    "'body', add it as a new subheading block using the token from rule 2, "
-    "appended at a sensible point — don't just tack it onto an unrelated "
-    "paragraph.\n"
+    "'body', add it as a new 'heading-2' block followed by its 'paragraph' "
+    "node(s), appended at a sensible point — don't just tack it onto an "
+    "unrelated paragraph.\n"
     "9. If the new material complements or extends a topic already present "
-    "in 'body', merge it into that existing paragraph/subtopic instead of "
-    "duplicating it as a separate block.\n"
+    "in 'body', merge it into that existing paragraph/subtopic's node(s) "
+    "instead of duplicating it as a separate block.\n"
     "10. Update 'index', 'sources' and 'conclusion' if the new content "
     "changes what they should say; otherwise mark them unchanged. The "
     "'index' is a narrative overview only — NEVER invent page numbers, the "
@@ -112,12 +151,51 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     "if the structured presentation data hasn't changed; if it has, regen "
     "it following the same rule as before: only the structured fields "
     "(student name, institution, subject, professor, student ID, date), "
-    "one per line, never a summary of the document's topic.\n"
+    "one per paragraph node, never a summary of the document's topic.\n"
+    "12. Preserve any existing 'styles' or 'marks' you see on nodes you "
+    "keep or lightly edit — don't strip formatting the user (or a previous "
+    "request) explicitly asked for. Only add new 'styles'/'marks' if the "
+    "current additional notes explicitly request them, and never invent "
+    "'image' nodes yourself.\n"
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
 )
 
 _URL_PATTERN = re.compile(r"https?://", re.IGNORECASE)
+
+_RESPONSE_SHAPE_HINT = """
+{
+  "title": "A short, original academic title you write yourself",
+  "sections": [
+    {"section_type": "presentation", "title": "...", "nodes": [ BLOCK, ... ]},
+    {"section_type": "index", "title": "...", "nodes": [ BLOCK, ... ]},
+    {"section_type": "introduction", "title": "...", "nodes": [ BLOCK, ... ]},
+    {"section_type": "body", "title": "...", "nodes": [ BLOCK, ... ]},
+    {"section_type": "conclusion", "title": "...", "nodes": [ BLOCK, ... ]},
+    {"section_type": "sources", "title": "...", "nodes": [ BLOCK, ... ]}
+  ],
+  "references": [
+    {"author": "...", "year": "...", "title": "...", "url": "..."}
+  ]
+}
+""".strip()
+
+_AUGMENT_RESPONSE_SHAPE_HINT = """
+{
+  "title": "usually the same title as before, unless it must change",
+  "sections": [
+    {"section_type": "presentation", "unchanged": true},
+    {"section_type": "index", "title": "...", "nodes": [ BLOCK, ... ]},
+    {"section_type": "introduction", "unchanged": true},
+    {"section_type": "body", "title": "...", "nodes": [ BLOCK, ... ]},
+    {"section_type": "conclusion", "title": "...", "nodes": [ BLOCK, ... ]},
+    {"section_type": "sources", "title": "...", "nodes": [ BLOCK, ... ]}
+  ],
+  "references": [
+    {"author": "...", "year": "...", "title": "...", "url": "..."}
+  ]
+}
+""".strip()
 
 
 class GeminiDocumentWriterAdapter(DocumentWriterPort):
@@ -207,34 +285,17 @@ Topic / working title given by the user (use this only as a hint about the
 subject — do NOT copy it verbatim, and especially never use it if it is a
 URL): "{title}"
 
-Additional notes from the user (extraction guidance, tone, focus, or a
-questionnaire to answer inside "body"): {notes}
+Additional notes from the user (extraction guidance, tone, focus, a
+questionnaire to answer inside "body", or explicit formatting requests to
+honor via 'styles'/'marks'): {notes}
 
 Required sections, in this exact order: {section_names}.
 
-Presentation/cover page data — the 'presentation' section's content must
-restate exactly these fields, one per line, and nothing else: {presentation}
+Presentation/cover page data — the 'presentation' section's nodes must
+restate exactly these fields, one per paragraph, and nothing else: {presentation}
 
 Respond with a single JSON object shaped exactly like this:
-{{
-  "title": "A short, original academic title you write yourself",
-  "sections": [
-    {{"section_type": "presentation", "title": "...", "content": "..."}},
-    {{"section_type": "index", "title": "...", "content": "..."}},
-    {{"section_type": "introduction", "title": "...", "content": "..."}},
-    {{"section_type": "body", "title": "...", "content": "..."}},
-    {{"section_type": "conclusion", "title": "...", "content": "..."}},
-    {{"section_type": "sources", "title": "...", "content": "..."}}
-  ],
-  "references": [
-    {{"author": "...", "year": "...", "title": "...", "url": "..."}}
-  ]
-}}
-
-Reminder: "content" is plain academic prose. The only Markdown allowed is
-**bold**, __underline__, "- " bullet lists, "1. " numbered lists (per the
-APA 7 rules above), and a line starting with "{_SUBHEADING_TOKEN}" to
-introduce a subtopic heading — used sparingly, and mostly inside "body".
+{_RESPONSE_SHAPE_HINT}
 
 --- SOURCE MATERIAL START ---
 {source_content}
@@ -257,7 +318,7 @@ introduce a subtopic heading — used sparingly, and mostly inside "body".
                 {
                     "section_type": s.section_type.value,
                     "title": s.title,
-                    "content": s.content,
+                    "nodes": [n.to_dict() for n in s.body_nodes],
                 }
                 for s in existing_sections
             ],
@@ -283,8 +344,8 @@ Existing sections (JSON, one entry per section_type): {existing_sections_json}
 
 Existing references (JSON): {existing_refs_json}
 
-Presentation/cover page data — the 'presentation' section's content must
-restate exactly these fields, one per line, and nothing else: {presentation}
+Presentation/cover page data — the 'presentation' section's nodes must
+restate exactly these fields, one per paragraph, and nothing else: {presentation}
 
 User's additional notes for this update: {notes}
 
@@ -294,23 +355,10 @@ New source material to incorporate:
 --- NEW MATERIAL END ---
 
 Respond with a single JSON object shaped exactly like this:
-{{
-  "title": "usually the same title as before, unless it must change",
-  "sections": [
-    {{"section_type": "presentation", "unchanged": true}},
-    {{"section_type": "index", "title": "...", "content": "..."}},
-    {{"section_type": "introduction", "unchanged": true}},
-    {{"section_type": "body", "title": "...", "content": "..."}},
-    {{"section_type": "conclusion", "title": "...", "content": "..."}},
-    {{"section_type": "sources", "title": "...", "content": "..."}}
-  ],
-  "references": [
-    {{"author": "...", "year": "...", "title": "...", "url": "..."}}
-  ]
-}}
+{_AUGMENT_RESPONSE_SHAPE_HINT}
 
 Every section_type must appear exactly once, either as "unchanged": true
-or with full "title"/"content". "references" must be the complete,
+or with full "title"/"nodes". "references" must be the complete,
 de-duplicated list (old entries plus any genuinely new ones).
 """.strip()
 
@@ -324,22 +372,7 @@ de-duplicated list (old entries plus any genuinely new ones).
         if not raw_sections:
             raise DocumentBuildError("Gemini response has no 'sections'.")
 
-        try:
-            sections = [
-                APASection(
-                    section_type=APASectionType(s["section_type"]),
-                    title=self._validate_title(
-                        s["title"], field="section title"
-                    ),
-                    content=s["content"],
-                )
-                for s in raw_sections
-            ]
-        except (KeyError, ValueError) as exc:
-            raise DocumentBuildError(
-                f"Malformed section in Gemini response: {exc}"
-            ) from exc
-
+        sections = [self._build_section(s) for s in raw_sections]
         references = self._parse_references(data)
         return title, sections, references
 
@@ -373,23 +406,58 @@ de-duplicated list (old entries plus any genuinely new ones).
                 sections.append(existing)
                 continue
 
-            try:
-                sections.append(
-                    APASection(
-                        section_type=section_type,
-                        title=self._validate_title(
-                            s["title"], field="section title"
-                        ),
-                        content=s["content"],
-                    )
-                )
-            except KeyError as exc:
-                raise DocumentBuildError(
-                    f"Malformed section in Gemini response: {exc}"
-                ) from exc
+            sections.append(self._build_section(s))
 
         references = self._parse_references(data)
         return title, sections, references
+
+    def _build_section(self, raw: dict) -> APASection:
+        try:
+            section_type = APASectionType(raw["section_type"])
+            title = self._validate_title(raw["title"], field="section title")
+            raw_nodes = raw["nodes"]
+        except (KeyError, ValueError) as exc:
+            raise DocumentBuildError(
+                f"Malformed section in Gemini response: {exc}"
+            ) from exc
+
+        if not raw_nodes:
+            raise DocumentBuildError(
+                f"Section '{section_type.value}' has no 'nodes'."
+            )
+
+        try:
+            body_nodes = tuple(
+                self._reject_image(
+                    _with_replaced(
+                        DocumentNode.from_dict(n),
+                        section_type=section_type.value,
+                    )
+                )
+                for n in raw_nodes
+            )
+        except DocumentBuildError as exc:
+            raise DocumentBuildError(
+                f"Malformed node in section '{section_type.value}': {exc}"
+            ) from exc
+
+        heading = DocumentNode(
+            type=HEADING_1,
+            section_type=section_type.value,
+            children=(text_node(title),),
+        )
+
+        return APASection(
+            section_type=section_type, heading=heading, body_nodes=body_nodes
+        )
+
+    def _reject_image(self, node: DocumentNode) -> DocumentNode:
+        if node.type == IMAGE:
+            raise DocumentBuildError(
+                "Gemini generated an 'image' node, which isn't allowed — "
+                "images are inserted by the application, not the writer."
+            )
+        return node
 
     def _parse_references(self, data: dict) -> list[SourceReference]:
         try:

@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from application.dtos.document_dtos import DocumentOutput
+from application.dtos.document_dtos import DocumentOutput, build_source_errors
 from application.exceptions import (
     DocumentAccessDeniedError,
     DocumentNotFoundError,
@@ -35,6 +35,7 @@ class GetDocumentUseCase:
             presentation=document.presentation,
             error_message=document.error_message,
             source_ids=[s.id for s in document.raw_sources],
+            source_errors=build_source_errors(document.raw_sources),
             created_at=document.created_at,
             updated_at=document.updated_at,
         )

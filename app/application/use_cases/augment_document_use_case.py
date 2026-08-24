@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from application.dtos.document_dtos import AugmentDocumentInput, DocumentOutput
+from application.dtos.document_dtos import (
+    AugmentDocumentInput,
+    DocumentOutput,
+    build_source_errors,
+)
 from application.exceptions import (
     DocumentAccessDeniedError,
     DocumentNotFoundError,
+    NoSourcesExtractedError,
 )
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
@@ -45,17 +50,19 @@ class AugmentDocumentUseCase:
             )
 
         new_sources = [Source.create_auto(raw) for raw in data.sources]
-        for source in new_sources:
-            extractor = self._extractor_factory.get_extractor(
-                source.source_type
+        extracted_sources = await self._extract_sources(new_sources)
+
+        if not extracted_sources:
+            # Nothing usable came out of this batch: don't touch the
+            # document at all, just surface the aggregated failure.
+            raise NoSourcesExtractedError(
+                "None of the new sources could be extracted; "
+                "nothing was added to the document."
             )
-            content = await extractor.extract(source.raw)
-            source.mark_extracted(content)
-            await self._sources.save(source)
 
         new_content = "\n\n".join(
             f"[Fuente nueva {i + 1}]\n{s.get_content()}"
-            for i, s in enumerate(new_sources)
+            for i, s in enumerate(extracted_sources)
         )
 
         title, sections, references = await self._writer.augment(
@@ -71,6 +78,8 @@ class AugmentDocumentUseCase:
             title=title,
             sections=sections,
             sources=references,
+            # Keep ALL new sources (including the failed ones) so they
+            # show up in raw_sources -> sources_error for the caller.
             new_raw_sources=new_sources,
         )
         await self._documents.save(document)
@@ -85,6 +94,23 @@ class AugmentDocumentUseCase:
             presentation=document.presentation,
             error_message=document.error_message,
             source_ids=[s.id for s in document.raw_sources],
+            source_errors=build_source_errors(document.raw_sources),
             created_at=document.created_at,
             updated_at=document.updated_at,
         )
+
+    async def _extract_sources(self, sources: list[Source]) -> list[Source]:
+        extracted: list[Source] = []
+        for source in sources:
+            try:
+                extractor = self._extractor_factory.get_extractor(
+                    source.source_type
+                )
+                content = await extractor.extract(source.raw)
+                source.mark_extracted(content)
+                extracted.append(source)
+            except Exception as exc:
+                source.mark_failed(str(exc))
+            finally:
+                await self._sources.save(source)
+        return extracted

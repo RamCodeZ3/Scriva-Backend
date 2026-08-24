@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -12,19 +16,66 @@ class CreateDocumentRequest(BaseModel):
     additional_notes: str | None = None
 
 
-class DocumentSectionOut(BaseModel):
-    section_type: str
+class MarkOut(BaseModel):
+    """Mirrors domain.value_objects.document_node.Mark."""
+
+    type: str
+    value: Any | None = None
+
+
+class SourceErrorOut(BaseModel):
+    source_id: str
+    raw: str
+    error: str
+
+
+class DocumentNodeOut(BaseModel):
+    id: str | None = None
+    type: str | None = None
+    section_type: str | None = None
+    text: str | None = None
+    marks: list[MarkOut] | None = None
+    children: list["DocumentNodeOut"] | None = None
+    styles: dict[str, Any] | None = None
+    src: str | None = None
+    alt: str | None = None
+    caption: str | None = None
+
+
+DocumentNodeOut.model_rebuild()
+
+
+class DocumentMetaOut(BaseModel):
     title: str
-    content: str
+    style_guide: str = "APA7"
 
 
-class CreateDocumentResponse(BaseModel):
-    status: str
-    document_id: str
+class DocumentStylesOut(BaseModel):
+    fontFamily: str = "Times New Roman, serif"
+    fontSize: str = "12pt"
+    color: str = "#000000"
+    backgroundColor: str = "#ffffff"
+    pageMargin: Any = "1in"
+    pageSize: Any = "letter"
+    orientation: str = "portrait"
+    lineHeight: float = 2.0
+
+
+class DocumentResponse(BaseModel):
+    id: str
+    title: str
     document_type: str
-    document_title: str
-    document_sections: list[DocumentSectionOut]
-    error_message: str | None = None
+    status: str
+    meta: DocumentMetaOut
+    document_styles: DocumentStylesOut
+    document_nodes: list[DocumentNodeOut]
+    user_id: str
+    presentation: PresentationOut
+    document_error: str | None = None
+    sources_error: list[SourceErrorOut] = Field(default_factory=list)
+    source_ids: list[str]
+    created_at: str
+    updated_at: str
 
 
 class PresentationOut(BaseModel):
@@ -35,34 +86,22 @@ class PresentationOut(BaseModel):
     institution: str | None = None
 
 
-class DocumentGetResponse(BaseModel):
-    id: str
-    title: str
-    document_type: str
-    status: str
-    sections: list[DocumentSectionOut]
-    user_id: str
-    presentation: PresentationOut
-    error_message: str | None = None
-    source_ids: list[str]
-    created_at: str
-    updated_at: str
-
-
 class UpdateDocumentRequest(BaseModel):
     title: str | None = None
-    sections: list[DocumentSectionOut] | None = None
+    document_nodes: list[DocumentNodeOut] | None = None
     presentation: PresentationOut | None = None
+    document_styles: DocumentStylesOut | None = None
 
 
 class DocumentPatchResponse(BaseModel):
     id: str
     title: str
     document_type: str
-    sections: list[DocumentSectionOut]
+    document_nodes: list[DocumentNodeOut]
     user_id: str
     presentation: PresentationOut
-    error_message: str | None = None
+    document_error: str | None = None
+    sources_error: list[SourceErrorOut] = Field(default_factory=list)
     source_ids: list[str]
     updated_at: str
 
@@ -77,11 +116,6 @@ class AugmentDocumentRequest(BaseModel):
     additional_notes: str | None = None
 
 
-class ExportDocumentRequest(BaseModel):
-    document_id: str
-    export: str
-
-
 class ExportDocumentResponse(BaseModel):
     status: str
     document_id: str
@@ -90,3 +124,9 @@ class ExportDocumentResponse(BaseModel):
     file_base64: str | None = None
     file_name: str | None = None
     content_type: str | None = None
+
+
+class DocumentReferenceResponse(BaseModel):
+    id: str
+    title: str
+    updated_at: str

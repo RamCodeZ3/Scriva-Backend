@@ -1,14 +1,36 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
 from domain.entities.document import DocumentStatus
+from domain.entities.source import Source, SourceStatus
 from domain.value_objects.apa_structure import APASection
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
+
+
+@dataclass(frozen=True)
+class SourceErrorOutput:
+    """Detail of a single source that failed extraction."""
+
+    source_id: UUID
+    raw: str
+    error: str
+
+
+def build_source_errors(raw_sources: list[Source]) -> list[SourceErrorOutput]:
+    return [
+        SourceErrorOutput(
+            source_id=s.id,
+            raw=s.raw,
+            error=s.error_message or "Unknown extraction error.",
+        )
+        for s in raw_sources
+        if s.status == SourceStatus.FAILED
+    ]
 
 
 @dataclass(frozen=True)
@@ -44,6 +66,7 @@ class DocumentOutput:
     source_ids: list[UUID]
     created_at: datetime
     updated_at: datetime
+    source_errors: list[SourceErrorOutput] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -85,3 +108,10 @@ class DocumentDetailOutput:
     export_url: str | None
     sections: list[APASection]
     sources: list[SourceReference]
+
+
+@dataclass(frozen=True)
+class DocumentReference:
+    id: UUID
+    title: str
+    updated_at: datetime

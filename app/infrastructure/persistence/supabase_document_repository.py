@@ -10,12 +10,18 @@ from uuid import UUID
 from supabase import Client
 
 from domain.entities.document import Document, DocumentStatus
-from domain.value_objects.apa_structure import APASection, APASectionType
+from domain.value_objects.apa_structure import (
+    APA7_DOCUMENT_STYLES,
+    APASection,
+    APASectionType,
+)
+from domain.value_objects.document_node import DocumentNode
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
 
 from application.dtos.export_result import ExportResult
+from application.dtos.document_dtos import DocumentReference
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.source_repository_port import SourceRepositoryPort
 
@@ -38,11 +44,11 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             return None
         return await self._to_entity(row)
 
-    async def list_by_user(self, user_id: UUID) -> list[Document]:
+    async def list_by_user(self, user_id: UUID) -> list[DocumentReference]:
         rows = await asyncio.to_thread(
             self._list_rows_by_user_sync, str(user_id)
         )
-        return [await self._to_entity(row) for row in rows]
+        return [await self._to_document_reference(row) for row in rows]
 
     async def delete(self, document_id: UUID) -> None:
         await asyncio.to_thread(self._delete_sync, str(document_id))
@@ -82,7 +88,7 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
     def _list_rows_by_user_sync(self, user_id: str) -> list[dict]:
         result = (
             self._client.table(self._TABLE)
-            .select("*")
+            .select("id, title, updated_at")
             .eq("user_id", user_id)
             .execute()
         )
@@ -107,8 +113,9 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             "source_ids": [str(s.id) for s in document.raw_sources],
             "presentation": _to_jsonable(document.presentation),
             "status": document.status.value,
-            "sections": [_to_jsonable(s) for s in document.sections],
+            "sections": [_section_to_dict(s) for s in document.sections],
             "sources": [_to_jsonable(s) for s in document.sources],
+            "document_styles": dict(document.document_styles),
             "created_at": document.created_at.isoformat(),
             "updated_at": document.updated_at.isoformat(),
             "error_message": document.error_message,
@@ -135,10 +142,19 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             status=DocumentStatus(row["status"]),
             sections=[_section_from_dict(s) for s in row["sections"]],
             sources=[SourceReference(**s) for s in row["sources"]],
+            document_styles=row.get("document_styles")
+            or dict(APA7_DOCUMENT_STYLES),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             error_message=row.get("error_message"),
             additional_notes=row.get("additional_notes"),
+        )
+
+    async def _to_document_reference(self, row: dict) -> DocumentReference:
+        return DocumentReference(
+            id=UUID(row["id"]),
+            title=row["title"],
+            updated_at=datetime.fromisoformat(row["updated_at"]),
         )
 
 
@@ -153,7 +169,19 @@ def _json_default(obj):
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
+def _section_to_dict(section: APASection) -> dict:
+    return {
+        "section_type": section.section_type.value,
+        "heading": section.heading.to_dict(),
+        "body_nodes": [n.to_dict() for n in section.body_nodes],
+    }
+
+
 def _section_from_dict(data: dict) -> APASection:
-    data = dict(data)
-    data["section_type"] = APASectionType(data["section_type"])
-    return APASection(**data)
+    return APASection(
+        section_type=APASectionType(data["section_type"]),
+        heading=DocumentNode.from_dict(data["heading"]),
+        body_nodes=tuple(
+            DocumentNode.from_dict(n) for n in data["body_nodes"]
+        ),
+    )

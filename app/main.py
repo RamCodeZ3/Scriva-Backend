@@ -4,11 +4,13 @@ import uvicorn
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from application.exceptions import (
     ApplicationError,
     DocumentAccessDeniedError,
     DocumentNotFoundError,
+    NoSourcesExtractedError,
     SourceNotFoundError,
     UnsupportedSourceTypeError,
     UserAlreadyExistsError,
@@ -22,6 +24,19 @@ from domain.exceptions import DocumentBuildError, InvalidSourceError
 from api.v1.documents import router as documents_router
 
 app = FastAPI(title="APA Document Generator API")
+
+origins = [
+    "http://localhost",
+    "http://localhost:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(documents_router)
 
@@ -94,6 +109,13 @@ async def application_error_handler(
     request: Request, exc: ApplicationError
 ) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(NoSourcesExtractedError)
+async def no_sources_extracted_handler(
+    request: Request, exc: NoSourcesExtractedError
+) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 
 if __name__ == "__main__":
