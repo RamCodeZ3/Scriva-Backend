@@ -90,6 +90,8 @@ class SupabaseDocumentRepository(DocumentRepositoryPort):
             self._client.table(self._TABLE)
             .select("id, title, updated_at")
             .eq("user_id", user_id)
+            .eq("status", "done")
+            .order("updated_at", desc=True)
             .execute()
         )
         return result.data or []

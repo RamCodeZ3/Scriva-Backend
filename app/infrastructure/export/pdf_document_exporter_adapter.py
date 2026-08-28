@@ -41,6 +41,7 @@ from domain.value_objects.document_node import (
     HEADING_5,
     IMAGE,
     NUMBERED_LIST,
+    PAGE_BREAK,
     PARAGRAPH,
     DocumentNode,
 )
@@ -529,6 +530,9 @@ _HEADING_STYLE_NAMES = {
 def _render_block(
     node: DocumentNode, styles: dict, content_width: float
 ) -> list:
+    if node.type == PAGE_BREAK:
+        return [PageBreak()]
+
     if node.type in _HEADING_STYLE_NAMES:
         base = styles[_HEADING_STYLE_NAMES[node.type]]
         style = _apply_block_style(base, node.styles)

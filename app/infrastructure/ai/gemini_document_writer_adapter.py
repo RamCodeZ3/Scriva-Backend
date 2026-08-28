@@ -17,6 +17,7 @@ from domain.value_objects.document_node import (
     IMAGE,
     LIST_ITEM,
     NUMBERED_LIST,
+    PAGE_BREAK,
     PARAGRAPH,
     DocumentNode,
     text_node,
@@ -68,13 +69,28 @@ _NODE_SCHEMA_RULES = (
     '{"url": "..."}) — only when the source material names a URL to '
     "cite inline. Use marks sparingly, never on whole sentences, never "
     "invented decoration.\n"
-    "  Block nodes ('paragraph', 'heading-N', 'block-quote', the two list "
-    "types) may optionally carry a 'styles' object (textAlign, "
+    "  EVERY block node ('paragraph', 'heading-N', 'block-quote', "
+    "'bulleted-list', 'numbered-list', 'list-item') MUST include a "
+    "'styles' object with 'textAlign' set explicitly — never omit it, "
+    "never leave it to be inferred. Use APA 7's own convention per type: "
+    "'paragraph' and 'block-quote' -> \"justify\"; 'heading-1' -> "
+    "\"center\"; 'heading-2' through 'heading-5' -> \"left\"; "
+    "'list-item' -> \"left\". Only deviate from these defaults if the "
+    "user's additional notes explicitly ask for different alignment on "
+    "specific content. Besides 'textAlign', 'styles' may also carry "
     "textIndent, marginTop/Bottom/Left/Right, lineHeight, "
-    "backgroundColor, borderLeft, etc.) — but leave 'styles' OUT entirely "
-    "unless the user's additional notes explicitly ask for particular "
-    "visual formatting. The default APA 7 look (no custom styles) is "
-    "correct for the overwhelming majority of requests.\n"
+    "backgroundColor, borderLeft, etc. — but add those ONLY when the "
+    "user's additional notes explicitly ask for that particular visual "
+    "formatting.\n"
+    f'  A standalone {{"type": "{PAGE_BREAK}"}} node forces a new page at '
+    "that point. It never has 'children' or 'styles'. The application "
+    "already inserts a page break between major sections on its own — "
+    "use this node ONLY inside a section's own 'nodes' (most usefully "
+    "'body'), and only when the user's additional notes explicitly ask "
+    "for a specific pagination break, or an exceptionally long subtopic "
+    "genuinely warrants starting fresh on a new page. Most documents "
+    "should contain ZERO of these; do not use it as decoration or to "
+    "separate ordinary subtopics — 'heading-2' already does that.\n"
     '  NEVER output a node with "type": "image". You have no way to '
     "produce a real, working file URL, so an invented 'src' would be a "
     "broken link — images are inserted by the application separately, "

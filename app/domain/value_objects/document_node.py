@@ -17,6 +17,7 @@ BULLETED_LIST = "bulleted-list"
 NUMBERED_LIST = "numbered-list"
 LIST_ITEM = "list-item"
 IMAGE = "image"
+PAGE_BREAK = "page-break"
 
 HEADING_TYPES = frozenset(
     {HEADING_1, HEADING_2, HEADING_3, HEADING_4, HEADING_5}
@@ -31,7 +32,7 @@ CONTAINER_BLOCK_TYPES = HEADING_TYPES | {
     NUMBERED_LIST,
     LIST_ITEM,
 }
-BLOCK_TYPES = CONTAINER_BLOCK_TYPES | {IMAGE}
+BLOCK_TYPES = CONTAINER_BLOCK_TYPES | {IMAGE, PAGE_BREAK}
 
 MARK_BOLD = "bold"
 MARK_ITALIC = "italic"
@@ -102,6 +103,10 @@ class Mark:
                 f"'link' mark value must be an object with a 'url', got: "
                 f"{self.value!r}"
             )
+        if self.type == PAGE_BREAK:
+            if self.children:
+                raise DocumentBuildError(f"A '{PAGE_BREAK}' node cannot have 'children'.")
+            return
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"type": self.type}
@@ -325,4 +330,16 @@ def image_node(
         src=src,
         alt=alt,
         caption=caption,
+    )
+
+
+def page_break_node(
+        *,
+        section_type: str | None = None,
+        node_id: str | None = None
+    ) -> DocumentNode:
+    return DocumentNode(
+        type=PAGE_BREAK,
+        id=node_id or _next_id(),
+        section_type=section_type,
     )
