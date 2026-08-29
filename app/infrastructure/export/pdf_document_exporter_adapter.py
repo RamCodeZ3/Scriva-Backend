@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import date
 from io import BytesIO
 from urllib.request import urlopen
 from xml.sax.saxutils import escape as _xml_escape
@@ -29,8 +28,8 @@ from reportlab.platypus.tableofcontents import TableOfContents
 from domain.entities.document import Document
 from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import (
-    APA7_DOCUMENT_STYLES,
     APASectionType,
+    normalize_document_styles,
 )
 from domain.value_objects.document_node import (
     BLOCK_QUOTE,
@@ -43,6 +42,8 @@ from domain.value_objects.document_node import (
     NUMBERED_LIST,
     PAGE_BREAK,
     PARAGRAPH,
+    TABLE,
+    TABLE_OF_CONTENTS,
     DocumentNode,
 )
 
@@ -125,10 +126,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         )
 
     def _build_sync(self, document: Document) -> bytes:
-        doc_styles = {
-            **APA7_DOCUMENT_STYLES,
-            **(document.document_styles or {}),
-        }
+        doc_styles = normalize_document_styles(document.document_styles)
         page_size = _resolve_page_size(doc_styles)
         margins = _resolve_margins(doc_styles)
         content_width = page_size[0] - margins["left"] - margins["right"]
@@ -157,16 +155,16 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
             background=_parse_color(
                 doc_styles.get("backgroundColor"), default=None
             ),
+            show_page_numbers=doc_styles["showPageNumbers"],
+            page_number_position=doc_styles["pageNumberPosition"],
         )
         doc.addPageTemplates(
             [PageTemplate(id="all", frames=[frame], onPage=on_page)]
         )
 
         story: list = []
-        story += self._build_cover_page(document, styles)
-        story.append(PageBreak())
-        story += self._build_toc_page(document, styles)
-        story.append(PageBreak())
+        story += self._build_cover_page(document, styles, content_width)
+        story += self._build_toc_page(document, styles, content_width)
 
         for section_type in (
             APASectionType.INTRODUCTION,
@@ -177,7 +175,6 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
                 document, section_type, styles, content_width
             )
 
-        story.append(PageBreak())
         story += self._build_references(document, styles)
 
         # multiBuild (not build): see _ApaDocTemplate docstring — this is
@@ -185,44 +182,70 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         doc.multiBuild(story)
         return buffer.getvalue()
 
-    def _build_cover_page(self, document: Document, styles: dict) -> list:
-
-        p = document.presentation
-
-        lines = [
-            p.student_name,
-            p.display_institution(),
-            p.display_subject(),
-            p.professor,
-        ]
-        if p.student_id:
-            lines.append(f"ID: {p.display_student_id()}")
-        lines.append(date.today().strftime("%B %d, %Y"))
+    def _build_cover_page(
+        self, document: Document, styles: dict, content_width: float
+    ) -> list:
+        section = document.get_section(APASectionType.PRESENTATION)
 
         elements: list = [
             Spacer(1, 2.5 * inch),
             Paragraph(_xml_escape(document.title), styles["TitleCover"]),
             Spacer(1, 0.5 * inch),
         ]
-        elements += [
-            Paragraph(_xml_escape(line), styles["CoverLine"]) for line in lines
-        ]
+        if section is None:
+            return elements
+
+        for node in section.body_nodes:
+            if node.type == PAGE_BREAK:
+                elements += _render_block(node, styles, content_width)
+                continue
+            elements.append(
+                Paragraph(_xml_escape(node.plain_text()), styles["CoverLine"])
+            )
         return elements
 
-    def _build_toc_page(self, document: Document, styles: dict) -> list:
-        toc = TableOfContents()
-        toc.levelStyles = [styles["TOCLevel0"], styles["TOCLevel1"]]
-        toc.dotsMinLevel = (
-            0  # dot leaders on every level, not just sub-entries
-        )
+    def _build_toc_page(
+        self, document: Document, styles: dict, content_width: float
+    ) -> list:
+        # Same principle as the cover page: rendered node-by-node from the
+        # 'index' section's own tree (built by build_index_section — see
+        # table_of_contents_builder.py), including its trailing
+        # 'page-break' node. No page break is added from outside the tree.
         index_section = document.get_section(APASectionType.INDEX)
         index_title = index_section.title if index_section else "Índice"
+
         # "Heading1Plain" is intentionally NOT the "Heading1" style, so this
         # heading doesn't register itself as a TOC entry.
-        return [
-            Paragraph(_xml_escape(index_title), styles["Heading1Plain"]),
-            toc,
+        elements: list = [
+            Paragraph(_xml_escape(index_title), styles["Heading1Plain"])
         ]
+
+        if index_section is None:
+            # Defensive fallback for a document somehow missing its index
+            # section entirely (should not happen — build_index_section
+            # always runs) — still produce a working TOC page.
+            elements.append(self._make_toc_flowable(styles))
+            elements.append(PageBreak())
+            return elements
+
+        for node in index_section.body_nodes:
+            if node.type == TABLE_OF_CONTENTS:
+                elements.append(self._make_toc_flowable(styles))
+            elif node.type == PAGE_BREAK:
+                elements += _render_block(node, styles, content_width)
+            else:
+                elements += _render_block(node, styles, content_width)
+        return elements
+
+    def _make_toc_flowable(self, styles: dict) -> TableOfContents:
+        # The node's own `entries` (see table_of_contents_builder.py) are
+        # only an editor-side preview — ReportLab computes the real,
+        # paginated entries itself from the Heading1/Heading2 paragraphs
+        # rendered elsewhere in the story (see _ApaDocTemplate.afterFlowable).
+        toc = TableOfContents()
+        toc.levelStyles = [styles["TOCLevel0"], styles["TOCLevel1"]]
+        toc.dotsMinLevel = 0  # dot leaders on every level, not just sub-entries
+        return toc
 
     def _build_section(
         self,
@@ -243,7 +266,9 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         return elements
 
     def _build_references(self, document: Document, styles: dict) -> list:
-        elements: list = [Paragraph("References", styles["Heading1"])]
+        sources_section = document.get_section(APASectionType.SOURCES)
+        title = sources_section.title if sources_section else "References"
+        elements: list = [Paragraph(_xml_escape(title), styles["Heading1"])]
         for ref in sorted(
             document.sources, key=lambda r: (r.author or "").lower()
         ):
@@ -436,23 +461,48 @@ def _build_styles(doc_styles: dict) -> dict[str, ParagraphStyle]:
     }
 
 
-def _make_on_page(*, page_size, margins: dict[str, float], background):
+def _make_on_page(
+    *,
+    page_size,
+    margins: dict[str, float],
+    background,
+    show_page_numbers: bool = True,
+    page_number_position: str = "top-right",
+):
     def _on_page(canvas, doc) -> None:
         canvas.saveState()
         if background is not None:
             canvas.setFillColor(background)
             canvas.rect(0, 0, page_size[0], page_size[1], fill=1, stroke=0)
-        canvas.setFont("Times-Roman", 12)
-        page_num = canvas.getPageNumber()
-        canvas.setFillColor(colors.black)
-        canvas.drawRightString(
-            page_size[0] - margins["right"],
-            page_size[1] - 0.75 * inch,
-            str(page_num),
-        )
+        if show_page_numbers:
+            _draw_page_number(
+                canvas,
+                page_size=page_size,
+                margins=margins,
+                position=page_number_position,
+            )
         canvas.restoreState()
 
     return _on_page
+
+
+def _draw_page_number(canvas, *, page_size, margins: dict[str, float], position: str) -> None:
+    canvas.setFont("Times-Roman", 12)
+    canvas.setFillColor(colors.black)
+    page_num = str(canvas.getPageNumber())
+
+    if position == "bottom-center":
+        canvas.drawCentredString(page_size[0] / 2, 0.5 * inch, page_num)
+    elif position == "bottom-right":
+        canvas.drawRightString(
+            page_size[0] - margins["right"], 0.5 * inch, page_num
+        )
+    else:  # "top-right" (default)
+        canvas.drawRightString(
+            page_size[0] - margins["right"],
+            page_size[1] - 0.75 * inch,
+            page_num,
+        )
 
 
 # --- inline rendering (marks) ------------------------------------------------
@@ -565,9 +615,56 @@ def _render_block(
     if node.type == IMAGE:
         return _render_image(node, styles, content_width)
 
+    if node.type == TABLE:
+        return [_render_table(node, styles, content_width)]
+
     raise DocumentBuildError(
         f"Unsupported block node in section: '{node.type}'"
     )
+
+
+def _render_table(
+    node: DocumentNode, styles: dict, content_width: float
+) -> Table:
+    rows = node.children  # each is a TABLE_ROW node
+    if not rows:
+        raise DocumentBuildError("A 'table' node has no rows.")
+
+    n_cols = len(rows[0].children)
+    col_width = content_width / n_cols if n_cols else content_width
+
+    data: list[list] = []
+    for row in rows:
+        if len(row.children) != n_cols:
+            raise DocumentBuildError(
+                "Every 'table-row' must have the same number of "
+                f"'table-cell' children (expected {n_cols}, got "
+                f"{len(row.children)})."
+            )
+        row_cells = []
+        for cell in row.children:  # each is a TABLE_CELL node
+            cell_flowables: list = []
+            for child in cell.children:
+                cell_flowables += _render_block(
+                    child, styles, col_width
+                )
+            row_cells.append(cell_flowables)
+        data.append(row_cells)
+
+    table = Table(data, colWidths=[col_width] * n_cols)
+    commands = [
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("GRID", (0, 0), (-1, -1), 0.75, colors.black),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+    ]
+    if len(data) > 1:
+        # First row is conventionally the header row.
+        commands.append(("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke))
+    table.setStyle(TableStyle(commands))
+    return table
 
 
 def _apply_block_style(
