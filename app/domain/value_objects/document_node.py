@@ -17,21 +17,33 @@ BULLETED_LIST = "bulleted-list"
 NUMBERED_LIST = "numbered-list"
 LIST_ITEM = "list-item"
 IMAGE = "image"
+PAGE_BREAK = "page-break"
+TABLE = "table"
+TABLE_ROW = "table-row"
+TABLE_CELL = "table-cell"
+TABLE_OF_CONTENTS = "table-of-contents"
 
 HEADING_TYPES = frozenset(
     {HEADING_1, HEADING_2, HEADING_3, HEADING_4, HEADING_5}
 )
 LIST_TYPES = frozenset({BULLETED_LIST, NUMBERED_LIST})
-# Every block type except "image" is a normal container: it must have
-# `children` and may carry `styles`.
+TABLE_TYPES = frozenset({TABLE, TABLE_ROW, TABLE_CELL})
+# Every block type except "image", "table-of-contents" and "page-break" is
+# a normal container: it must have `children` and may carry `styles`.
 CONTAINER_BLOCK_TYPES = HEADING_TYPES | {
     PARAGRAPH,
     BLOCK_QUOTE,
     BULLETED_LIST,
     NUMBERED_LIST,
     LIST_ITEM,
-}
-BLOCK_TYPES = CONTAINER_BLOCK_TYPES | {IMAGE}
+} | TABLE_TYPES
+BLOCK_TYPES = CONTAINER_BLOCK_TYPES | {IMAGE, PAGE_BREAK, TABLE_OF_CONTENTS}
+
+# Valid positions for page-number foliation, normalized into
+# `document_styles.pageNumberPosition` (see apa_structure.py).
+PAGE_NUMBER_POSITIONS = frozenset(
+    {"top-right", "bottom-center", "bottom-right"}
+)
 
 MARK_BOLD = "bold"
 MARK_ITALIC = "italic"
@@ -174,6 +186,33 @@ class DocumentNode:
                 raise DocumentBuildError("An 'image' node requires 'src'.")
             return
 
+        if self.type == TABLE_OF_CONTENTS:
+            if self.children:
+                raise DocumentBuildError(
+                    "A 'table-of-contents' node cannot have 'children' — "
+                    "it is a non-editable widget, not rich text. The real, "
+                    "paginated entries are computed by the PDF exporter "
+                    "itself from the heading-1/heading-2 paragraphs "
+                    "rendered elsewhere in the document — this node is a "
+                    "pure placeholder and carries no data of its own."
+                )
+            if self.src or self.alt or self.caption:
+                raise DocumentBuildError(
+                    "'src'/'alt'/'caption' only apply to 'image' nodes."
+                )
+            return
+
+        if self.type == PAGE_BREAK:
+            if self.children:
+                raise DocumentBuildError(
+                    "A 'page-break' node cannot have 'children'."
+                )
+            if self.src or self.alt or self.caption:
+                raise DocumentBuildError(
+                    "A 'page-break' node cannot carry 'src'/'alt'/'caption'."
+                )
+            return
+
         if self.src or self.alt or self.caption:
             raise DocumentBuildError(
                 "'src'/'alt'/'caption' only apply to 'image' nodes."
@@ -192,12 +231,31 @@ class DocumentNode:
                 raise DocumentBuildError(
                     "'list-item' children must all be leaf text nodes."
                 )
+        if self.type == TABLE:
+            if any(c.type != TABLE_ROW for c in self.children):
+                raise DocumentBuildError(
+                    f"'{TABLE}' children must all be '{TABLE_ROW}' nodes."
+                )
+        if self.type == TABLE_ROW:
+            if any(c.type != TABLE_CELL for c in self.children):
+                raise DocumentBuildError(
+                    f"'{TABLE_ROW}' children must all be '{TABLE_CELL}' "
+                    "nodes."
+                )
+        if self.type == TABLE_CELL:
+            if any(c.text is not None for c in self.children):
+                raise DocumentBuildError(
+                    f"'{TABLE_CELL}' children must be block nodes (e.g. "
+                    "'paragraph'), not bare leaf text nodes."
+                )
 
     def plain_text(self) -> str:
         if self.text is not None:
             return self.text
         if self.type == IMAGE:
             return self.caption or self.alt or ""
+        if self.type in (TABLE_OF_CONTENTS, PAGE_BREAK):
+            return ""
         return "".join(c.plain_text() for c in self.children)
 
     def to_dict(self) -> dict[str, Any]:
@@ -221,6 +279,12 @@ class DocumentNode:
                 out["alt"] = self.alt
             if self.caption:
                 out["caption"] = self.caption
+            return out
+
+        if self.type == TABLE_OF_CONTENTS:
+            return out
+
+        if self.type == PAGE_BREAK:
             return out
 
         out["children"] = [c.to_dict() for c in self.children]
@@ -261,6 +325,21 @@ class DocumentNode:
                 src=data.get("src"),
                 alt=data.get("alt"),
                 caption=data.get("caption"),
+            )
+
+        if node_type == TABLE_OF_CONTENTS:
+            return cls(
+                type=node_type,
+                id=node_id,
+                section_type=data.get("section_type"),
+                styles=styles,
+            )
+
+        if node_type == PAGE_BREAK:
+            return cls(
+                type=node_type,
+                id=node_id,
+                section_type=data.get("section_type"),
             )
 
         raw_children = data.get("children")
@@ -325,4 +404,72 @@ def image_node(
         src=src,
         alt=alt,
         caption=caption,
+    )
+
+
+def page_break_node(
+        *,
+        section_type: str | None = None,
+        node_id: str | None = None
+    ) -> DocumentNode:
+    return DocumentNode(
+        type=PAGE_BREAK,
+        id=node_id or _next_id(),
+        section_type=section_type,
+    )
+
+
+def table_node(
+    rows: Sequence[DocumentNode],
+    *,
+    section_type: str | None = None,
+    node_id: str | None = None,
+    styles: dict[str, Any] | None = None,
+) -> DocumentNode:
+    return DocumentNode(
+        type=TABLE,
+        children=tuple(rows),
+        section_type=section_type,
+        id=node_id or _next_id(),
+        styles=dict(styles or {}),
+    )
+
+
+def table_row_node(
+    cells: Sequence[DocumentNode],
+    *,
+    node_id: str | None = None,
+    styles: dict[str, Any] | None = None,
+) -> DocumentNode:
+    return DocumentNode(
+        type=TABLE_ROW,
+        children=tuple(cells),
+        id=node_id or _next_id(),
+        styles=dict(styles or {}),
+    )
+
+
+def table_cell_node(
+    children: Sequence[DocumentNode],
+    *,
+    node_id: str | None = None,
+    styles: dict[str, Any] | None = None,
+) -> DocumentNode:
+    return DocumentNode(
+        type=TABLE_CELL,
+        children=tuple(children),
+        id=node_id or _next_id(),
+        styles=dict(styles or {}),
+    )
+
+
+def table_of_contents_node(
+    *,
+    section_type: str | None = None,
+    node_id: str | None = None,
+) -> DocumentNode:
+    return DocumentNode(
+        type=TABLE_OF_CONTENTS,
+        id=node_id or _next_id(),
+        section_type=section_type,
     )

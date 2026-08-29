@@ -17,8 +17,14 @@ from domain.value_objects.document_node import (
     IMAGE,
     LIST_ITEM,
     NUMBERED_LIST,
+    PAGE_BREAK,
     PARAGRAPH,
+    TABLE,
+    TABLE_CELL,
+    TABLE_OF_CONTENTS,
+    TABLE_ROW,
     DocumentNode,
+    page_break_node,
     text_node,
 )
 from domain.value_objects.document_type import DocumentType
@@ -27,6 +33,10 @@ from domain.value_objects.source_ref import SourceReference
 
 from application.ports.document_writer_port import DocumentWriterPort
 
+from domain.services.table_of_contents_builder import build_index_section
+
+# Full canonical APA 7 order (used for sorting the final section list —
+# 'index' is never requested from the AI, see _AI_SECTION_ORDER below).
 _SECTION_ORDER = [
     APASectionType.PRESENTATION,
     APASectionType.INDEX,
@@ -35,6 +45,24 @@ _SECTION_ORDER = [
     APASectionType.CONCLUSION,
     APASectionType.SOURCES,
 ]
+
+# The subset of sections the AI is actually asked to write. 'index' is
+# deliberately excluded: it is synthesized by build_index_section() from
+# the real heading-1/heading-2 nodes the AI produced elsewhere, after the
+# response is parsed — never authored (or narrated) by the AI itself.
+_AI_SECTION_ORDER = [
+    s for s in _SECTION_ORDER if s is not APASectionType.INDEX
+]
+
+
+def _ensure_trailing_page_break(section: APASection) -> APASection:
+    if section.body_nodes and section.body_nodes[-1].type == PAGE_BREAK:
+        return section
+    return _with_replaced(
+        section,
+        body_nodes=section.body_nodes
+        + (page_break_node(section_type=section.section_type.value),),
+    )
 
 _NODE_SCHEMA_RULES = (
     "CRITICAL OUTPUT RULES — the renderer understands ONLY a small, "
@@ -59,6 +87,15 @@ _NODE_SCHEMA_RULES = (
     f'  - {{"type": "{NUMBERED_LIST}", "children": [ LIST_ITEM, ... ]}} — '
     "use when items are steps, a chronology, or a ranked hierarchy.\n"
     f'  A LIST_ITEM is {{"type": "{LIST_ITEM}", "children": [ TEXT, ... ]}}.\n'
+    f'  - {{"type": "{TABLE}", "children": [ TABLE_ROW, ... ]}} — use ONLY '
+    "for genuinely tabular data (rows of comparable fields/numbers). Do "
+    "not use a table to lay out things that are really a list or plain "
+    f'prose. A TABLE_ROW is {{"type": "{TABLE_ROW}", "children": [ '
+    f'TABLE_CELL, ... ]}}. A TABLE_CELL is {{"type": "{TABLE_CELL}", '
+    '"children": [ PARAGRAPH, ... ]}} — a cell\'s children are block '
+    "nodes (usually a single 'paragraph'), never bare text nodes. Every "
+    "row in a table must have the same number of cells, and the first "
+    "row is normally the header row (its cells' paragraph text in bold).\n"
     '  A TEXT node is a leaf: {"text": "..."} or, when a mark is genuinely '
     'useful, {"text": "...", "marks": [ MARK, ... ]}. Each MARK is an '
     'object {"type": "bold"} or {"type": "color", "value": "#d93025"}. '
@@ -68,17 +105,49 @@ _NODE_SCHEMA_RULES = (
     '{"url": "..."}) — only when the source material names a URL to '
     "cite inline. Use marks sparingly, never on whole sentences, never "
     "invented decoration.\n"
-    "  Block nodes ('paragraph', 'heading-N', 'block-quote', the two list "
-    "types) may optionally carry a 'styles' object (textAlign, "
+    "  EVERY block node ('paragraph', 'heading-N', 'block-quote', "
+    "'bulleted-list', 'numbered-list', 'list-item') MUST include a "
+    "'styles' object with 'textAlign' set explicitly — never omit it, "
+    "never leave it to be inferred. Use APA 7's own convention per type: "
+    "'paragraph' and 'block-quote' -> \"justify\"; 'heading-1' -> "
+    "\"center\"; 'heading-2' through 'heading-5' -> \"left\"; "
+    "'list-item' -> \"left\". Only deviate from these defaults if the "
+    "user's additional notes explicitly ask for different alignment on "
+    "specific content. Besides 'textAlign', 'styles' may also carry "
     "textIndent, marginTop/Bottom/Left/Right, lineHeight, "
-    "backgroundColor, borderLeft, etc.) — but leave 'styles' OUT entirely "
-    "unless the user's additional notes explicitly ask for particular "
-    "visual formatting. The default APA 7 look (no custom styles) is "
-    "correct for the overwhelming majority of requests.\n"
+    "backgroundColor, borderLeft, etc. — but add those ONLY when the "
+    "user's additional notes explicitly ask for that particular visual "
+    "formatting.\n"
+    f'  A standalone {{"type": "{PAGE_BREAK}"}} node forces a new page at '
+    "that point, and never has 'children' or 'styles'. The exporter "
+    "renders EXACTLY the tree you return — it never invents page breaks "
+    "of its own — so the ones APA 7 always requires must be present in "
+    "your JSON:\n"
+    f'    - The \'presentation\' section\'s \'nodes\' MUST end with a '
+    f'{{"type": "{PAGE_BREAK}"}} node (the cover page always starts the '
+    "table of contents on a fresh page).\n"
+    f'    - The \'conclusion\' section\'s \'nodes\' MUST end with a '
+    f'{{"type": "{PAGE_BREAK}"}} node (the body always starts the '
+    "references on a fresh page).\n"
+    "    - Do NOT add a page-break node anywhere else — not between "
+    "'introduction' and 'body', not between subtopics ('heading-2' "
+    "already separates those visually), and not as decoration — unless "
+    "the user's additional notes explicitly ask for one extra, specific "
+    "pagination break somewhere in the body.\n"
+    "    - (The 'index' section's own trailing page break is added by "
+    "the application, since you never write that section — see the "
+    "'index' rule below.)\n"
     '  NEVER output a node with "type": "image". You have no way to '
     "produce a real, working file URL, so an invented 'src' would be a "
     "broken link — images are inserted by the application separately, "
     "after your text is generated.\n"
+    f'  NEVER output a node with "type": "{TABLE_OF_CONTENTS}". That node '
+    "is built entirely by the application from your real headings — see "
+    "the 'index' rule below.\n"
+    "  NEVER type a page number into paragraph text anywhere in the "
+    'document (no "Página 1", no "[page X]", no manual folio). The '
+    "application draws real page numbers itself from "
+    "'document_styles.showPageNumbers' / 'pageNumberPosition'.\n"
     "Rules that still apply regardless of node type:\n"
     "- Lists are the exception, not the default: most content must be "
     "'paragraph' nodes. Every item in a list must be grammatically "
@@ -100,27 +169,54 @@ _SYSTEM_INSTRUCTION = (
     f"{_NODE_SCHEMA_RULES}\n"
     "7. If the user's additional notes contain a questionnaire (a list of "
     "questions to answer), address every question explicitly and "
-    "completely inside 'body', while still producing all six required "
+    "completely inside 'body', while still producing all five required "
     "sections normally.\n"
     "8. The 'presentation' section is REQUIRED and must exist, but it is "
     "NOT a summary or abstract of the document's topic. Its 'nodes' must "
     "restate ONLY the structured presentation data given to you below — "
     "student name, institution, subject/course, professor, student ID (if "
     "provided), and today's date — as separate 'paragraph' nodes (one "
-    "field per paragraph), in the source's language, exactly as given. Do "
-    "NOT add a summary of what the document is about, do NOT add a field "
-    "that wasn't provided to you, and do NOT omit any field that was.\n"
-    "9. The 'index' section is a short plain-language outline of what each "
-    "section covers, as 'paragraph' nodes or a simple list — NEVER invent "
-    "page numbers, since you have no way of knowing how the final document "
-    "will paginate. The renderer builds the authoritative, paginated table "
-    "of contents separately from the real headings; treat this section "
-    "only as a narrative overview.\n"
-    "10. If the user's additional notes explicitly request custom "
+    "field per paragraph), in the source's language, exactly as given. "
+    "Each paragraph must contain ONLY the field's plain value, with NO "
+    'label or prefix of any kind — write "Aram Musset", never "Nombre: '
+    'Aram Musset" or "Student: Aram Musset"; write "Universidad XYZ", '
+    'never "Institución: Universidad XYZ". Do NOT add a summary of what '
+    "the document is about, do NOT add a field that wasn't provided to "
+    "you, and do NOT omit any field that was. Its LAST node must be a "
+    '{"type": "page-break"} node — see the page-break rule above.\n'
+    "9. NEVER produce a section with \"section_type\": \"index\" — omit it "
+    "completely from your JSON response. The application builds the "
+    "table of contents itself, after you respond, from the real "
+    "'heading-1' and 'heading-2' nodes you wrote in the other sections — "
+    "it is not something you write or narrate. Your required sections "
+    "are therefore exactly these five, in order: presentation, "
+    "introduction, body, conclusion, sources.\n"
+    "10. The 'introduction' section's \"title\" must be a specific, "
+    "content-descriptive heading you write in your own words — e.g. "
+    '"El Problema del Acoplamiento en el Software Moderno", not the '
+    'generic word "Introducción"/"Introduction" (nor a literal '
+    "translation of it, nor any other section-label placeholder). A "
+    "reader should learn something about THIS document's actual topic "
+    "just from that heading.\n"
+    "11. The 'body' section's \"title\" is used ONLY for internal "
+    "bookkeeping and is NEVER rendered as a heading in the final "
+    'document — do not write generic labels like "Desarrollo"/"Body"/'
+    '"Cuerpo" expecting them to appear on the page; pick any short '
+    "internal label (it truly doesn't matter, e.g. the document's main "
+    "topic). What DOES appear on the page is 'body'.'nodes' directly: "
+    "it must begin IMMEDIATELY with a 'heading-2' node for its first "
+    "subtopic — never prefix it with a generic top-level heading of "
+    "your own. 'body' should read as a sequence of specific topics and "
+    "subtopics, each with its own descriptive 'heading-2' (and, if truly "
+    "needed, nested 'heading-3'), never as a single undifferentiated "
+    "block under one generic label.\n"
+    "12. If the user's additional notes explicitly request custom "
     "visual formatting (a specific color, alignment, emphasis, a "
     "highlighted term, a quote box, etc.), honor it using 'styles' on the "
     "relevant block node(s) and/or 'marks' on the relevant text — but "
     "only for what was actually requested, nothing more.\n"
+    "13. The 'conclusion' section's LAST node must be a "
+    '{"type": "page-break"} node — see the page-break rule above.\n'
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
 )
@@ -137,21 +233,37 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     "8. If the new material is a genuinely new subtopic not covered yet in "
     "'body', add it as a new 'heading-2' block followed by its 'paragraph' "
     "node(s), appended at a sensible point — don't just tack it onto an "
-    "unrelated paragraph.\n"
+    "unrelated paragraph. 'body'.'nodes' must still begin IMMEDIATELY with "
+    "a 'heading-2' — never introduce a generic top-level heading like "
+    '"Desarrollo"/"Body" of your own; its "title" field is internal '
+    "bookkeeping only and is never rendered (see the equivalent rule in "
+    "the initial-write instructions).\n"
     "9. If the new material complements or extends a topic already present "
     "in 'body', merge it into that existing paragraph/subtopic's node(s) "
     "instead of duplicating it as a separate block.\n"
-    "10. Update 'index', 'sources' and 'conclusion' if the new content "
-    "changes what they should say; otherwise mark them unchanged. The "
-    "'index' is a narrative overview only — NEVER invent page numbers, the "
-    "renderer builds the authoritative table of contents separately.\n"
-    "11. 'introduction' is almost never affected by new material — mark it "
-    "unchanged unless the new content truly changes the document's overall "
-    "scope. 'presentation' must always be present too — mark it unchanged "
-    "if the structured presentation data hasn't changed; if it has, regen "
-    "it following the same rule as before: only the structured fields "
-    "(student name, institution, subject, professor, student ID, date), "
-    "one per paragraph node, never a summary of the document's topic.\n"
+    "10. NEVER return a section with \"section_type\": \"index\" — not as "
+    "a full section, not even as {\"unchanged\": true}. Omit it entirely, "
+    "in every response, always. The application rebuilds the table of "
+    "contents itself after merging your sections, from whatever "
+    "'heading-1'/'heading-2' nodes end up in the final document — it is "
+    "never something you write.\n"
+    "11. Update 'sources' and 'conclusion' if the new content changes "
+    "what they should say; otherwise mark them unchanged. If you DO "
+    "regenerate 'conclusion', its LAST node must still be a "
+    '{"type": "page-break"} node, exactly as before. '
+    "'introduction' is almost never affected by new material — mark it "
+    "unchanged unless the new content truly changes the document's "
+    "overall scope. If you DO regenerate it, its \"title\" must remain a "
+    "specific, content-descriptive heading in your own words — never the "
+    'generic word "Introducción"/"Introduction". \'presentation\' must '
+    "always be present too — mark it "
+    "unchanged if the structured presentation data hasn't changed; if it "
+    "has, regen it following the same rule as before: only the "
+    "structured fields (student name, institution, subject, professor, "
+    "student ID, date), one per paragraph node with NO label/prefix "
+    '(e.g. "Aram Musset", never "Nombre: Aram Musset"), never a summary '
+    "of the document's topic, and its LAST node must still be a "
+    '{"type": "page-break"} node.\n'
     "12. Preserve any existing 'styles' or 'marks' you see on nodes you "
     "keep or lightly edit — don't strip formatting the user (or a previous "
     "request) explicitly asked for. Only add new 'styles'/'marks' if the "
@@ -168,9 +280,8 @@ _RESPONSE_SHAPE_HINT = """
   "title": "A short, original academic title you write yourself",
   "sections": [
     {"section_type": "presentation", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "index", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "introduction", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "body", "title": "...", "nodes": [ BLOCK, ... ]},
+    {"section_type": "introduction", "title": "A specific, content-descriptive heading — never the generic word 'Introducción'", "nodes": [ BLOCK, ... ]},
+    {"section_type": "body", "title": "internal label only, never rendered", "nodes": [ {"type": "heading-2", ...}, BLOCK, ... ]},
     {"section_type": "conclusion", "title": "...", "nodes": [ BLOCK, ... ]},
     {"section_type": "sources", "title": "...", "nodes": [ BLOCK, ... ]}
   ],
@@ -185,7 +296,6 @@ _AUGMENT_RESPONSE_SHAPE_HINT = """
   "title": "usually the same title as before, unless it must change",
   "sections": [
     {"section_type": "presentation", "unchanged": true},
-    {"section_type": "index", "title": "...", "nodes": [ BLOCK, ... ]},
     {"section_type": "introduction", "unchanged": true},
     {"section_type": "body", "title": "...", "nodes": [ BLOCK, ... ]},
     {"section_type": "conclusion", "title": "...", "nodes": [ BLOCK, ... ]},
@@ -224,7 +334,8 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         raw_text = await self._generate(
             prompt, system_instruction=_SYSTEM_INSTRUCTION
         )
-        return self._parse_response(raw_text)
+        title_out, sections, references = self._parse_response(raw_text)
+        return title_out, self._finalize_sections(sections), references
 
     async def augment(
         self,
@@ -247,9 +358,43 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         raw_text = await self._generate(
             prompt, system_instruction=_AUGMENT_SYSTEM_INSTRUCTION
         )
-        return self._parse_augment_response(
+        title_out, sections, references = self._parse_augment_response(
             raw_text, existing_sections=existing_sections
         )
+        return title_out, self._finalize_sections(sections), references
+
+    def _finalize_sections(
+        self, sections: list[APASection]
+    ) -> list[APASection]:
+        """Drops any 'index' section the model produced despite being told
+        not to (defensive — see rule 9 / rule 10 in the system prompts),
+        rebuilds it from scratch (build_index_section() is a pure
+        placeholder — see that module's docstring for why it needs no
+        input), guarantees the mandatory APA 7 page breaks are actually
+        present in the tree (defensive — see the page-break rule in
+        _NODE_SCHEMA_RULES), and returns the full section list in
+        canonical APA 7 order.
+
+        Doing this here — on the persisted node tree itself, not as an
+        export-time side effect — is what keeps the WYSIWYG editor and the
+        PDF export in sync: both read the very same nodes.
+        """
+        without_index = [
+            s for s in sections if s.section_type is not APASectionType.INDEX
+        ]
+        without_index = [
+            _ensure_trailing_page_break(s)
+            if s.section_type
+            in (APASectionType.PRESENTATION, APASectionType.CONCLUSION)
+            else s
+            for s in without_index
+        ]
+        index_section = _ensure_trailing_page_break(
+            build_index_section()
+        )
+        finalized = without_index + [index_section]
+        finalized.sort(key=lambda s: s.section_type.order)
+        return finalized
 
     async def _generate(self, prompt: str, *, system_instruction: str) -> str:
         try:
@@ -275,7 +420,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         presentation: PresentationInfo,
         additional_notes: str | None,
     ) -> str:
-        section_names = ", ".join(s.value for s in _SECTION_ORDER)
+        section_names = ", ".join(s.value for s in _AI_SECTION_ORDER)
         notes = _clean_notes(additional_notes)
         return f"""
 Write a "{document_type.value}" document, following APA 7 rules, based
