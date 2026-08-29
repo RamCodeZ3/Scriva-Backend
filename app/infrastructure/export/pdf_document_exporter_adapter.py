@@ -185,6 +185,7 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
     def _build_cover_page(
         self, document: Document, styles: dict, content_width: float
     ) -> list:
+        
         section = document.get_section(APASectionType.PRESENTATION)
 
         elements: list = [
@@ -207,10 +208,6 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
     def _build_toc_page(
         self, document: Document, styles: dict, content_width: float
     ) -> list:
-        # Same principle as the cover page: rendered node-by-node from the
-        # 'index' section's own tree (built by build_index_section — see
-        # table_of_contents_builder.py), including its trailing
-        # 'page-break' node. No page break is added from outside the tree.
         index_section = document.get_section(APASectionType.INDEX)
         index_title = index_section.title if index_section else "Índice"
 
@@ -258,9 +255,12 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         if section is None:
             return []
 
-        elements: list = [
-            Paragraph(_xml_escape(section.title), styles["Heading1"])
-        ]
+        elements: list = []
+        if section_type is not APASectionType.BODY:
+            
+            elements.append(
+                Paragraph(_xml_escape(section.title), styles["Heading1"])
+            )
         for node in section.body_nodes:
             elements += _render_block(node, styles, content_width)
         return elements
@@ -705,9 +705,17 @@ def _apply_block_style(
 
     if not overrides:
         return base
-    return ParagraphStyle(
-        f"{base.name}-override-{id(node_styles)}", parent=base, **overrides
-    )
+    # IMPORTANT: keep the SAME style name as `base` (not a renamed
+    # "-override-" variant). These ParagraphStyle objects are never
+    # registered in a shared StyleSheet1, so name reuse is harmless — but
+    # _ApaDocTemplate.afterFlowable matches TOC entries by exact style
+    # name ("Heading1"/"Heading2"). Every heading the AI writes always
+    # carries a 'styles' override (textAlign is mandatory), so renaming
+    # the style here silently dropped EVERY heading-2 from the table of
+    # contents while heading-1 section titles (rendered separately,
+    # without going through this function) kept working — that's the bug
+    # this comment is guarding against regressing.
+    return ParagraphStyle(base.name, parent=base, **overrides)
 
 
 def _wrap_with_box(

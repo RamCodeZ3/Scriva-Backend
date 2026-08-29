@@ -46,6 +46,10 @@ _SECTION_ORDER = [
     APASectionType.SOURCES,
 ]
 
+# The subset of sections the AI is actually asked to write. 'index' is
+# deliberately excluded: it is synthesized by build_index_section() from
+# the real heading-1/heading-2 nodes the AI produced elsewhere, after the
+# response is parsed — never authored (or narrated) by the AI itself.
 _AI_SECTION_ORDER = [
     s for s in _SECTION_ORDER if s is not APASectionType.INDEX
 ]
@@ -165,7 +169,7 @@ _SYSTEM_INSTRUCTION = (
     f"{_NODE_SCHEMA_RULES}\n"
     "7. If the user's additional notes contain a questionnaire (a list of "
     "questions to answer), address every question explicitly and "
-    "completely inside 'body', while still producing all six required "
+    "completely inside 'body', while still producing all five required "
     "sections normally.\n"
     "8. The 'presentation' section is REQUIRED and must exist, but it is "
     "NOT a summary or abstract of the document's topic. Its 'nodes' must "
@@ -187,12 +191,31 @@ _SYSTEM_INSTRUCTION = (
     "it is not something you write or narrate. Your required sections "
     "are therefore exactly these five, in order: presentation, "
     "introduction, body, conclusion, sources.\n"
-    "10. If the user's additional notes explicitly request custom "
+    "10. The 'introduction' section's \"title\" must be a specific, "
+    "content-descriptive heading you write in your own words — e.g. "
+    '"El Problema del Acoplamiento en el Software Moderno", not the '
+    'generic word "Introducción"/"Introduction" (nor a literal '
+    "translation of it, nor any other section-label placeholder). A "
+    "reader should learn something about THIS document's actual topic "
+    "just from that heading.\n"
+    "11. The 'body' section's \"title\" is used ONLY for internal "
+    "bookkeeping and is NEVER rendered as a heading in the final "
+    'document — do not write generic labels like "Desarrollo"/"Body"/'
+    '"Cuerpo" expecting them to appear on the page; pick any short '
+    "internal label (it truly doesn't matter, e.g. the document's main "
+    "topic). What DOES appear on the page is 'body'.'nodes' directly: "
+    "it must begin IMMEDIATELY with a 'heading-2' node for its first "
+    "subtopic — never prefix it with a generic top-level heading of "
+    "your own. 'body' should read as a sequence of specific topics and "
+    "subtopics, each with its own descriptive 'heading-2' (and, if truly "
+    "needed, nested 'heading-3'), never as a single undifferentiated "
+    "block under one generic label.\n"
+    "12. If the user's additional notes explicitly request custom "
     "visual formatting (a specific color, alignment, emphasis, a "
     "highlighted term, a quote box, etc.), honor it using 'styles' on the "
     "relevant block node(s) and/or 'marks' on the relevant text — but "
     "only for what was actually requested, nothing more.\n"
-    "11. The 'conclusion' section's LAST node must be a "
+    "13. The 'conclusion' section's LAST node must be a "
     '{"type": "page-break"} node — see the page-break rule above.\n'
     "You always answer with a single JSON object and nothing else — no "
     "markdown fences, no commentary, no preamble."
@@ -210,7 +233,11 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     "8. If the new material is a genuinely new subtopic not covered yet in "
     "'body', add it as a new 'heading-2' block followed by its 'paragraph' "
     "node(s), appended at a sensible point — don't just tack it onto an "
-    "unrelated paragraph.\n"
+    "unrelated paragraph. 'body'.'nodes' must still begin IMMEDIATELY with "
+    "a 'heading-2' — never introduce a generic top-level heading like "
+    '"Desarrollo"/"Body" of your own; its "title" field is internal '
+    "bookkeeping only and is never rendered (see the equivalent rule in "
+    "the initial-write instructions).\n"
     "9. If the new material complements or extends a topic already present "
     "in 'body', merge it into that existing paragraph/subtopic's node(s) "
     "instead of duplicating it as a separate block.\n"
@@ -226,7 +253,10 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     '{"type": "page-break"} node, exactly as before. '
     "'introduction' is almost never affected by new material — mark it "
     "unchanged unless the new content truly changes the document's "
-    "overall scope. 'presentation' must always be present too — mark it "
+    "overall scope. If you DO regenerate it, its \"title\" must remain a "
+    "specific, content-descriptive heading in your own words — never the "
+    'generic word "Introducción"/"Introduction". \'presentation\' must '
+    "always be present too — mark it "
     "unchanged if the structured presentation data hasn't changed; if it "
     "has, regen it following the same rule as before: only the "
     "structured fields (student name, institution, subject, professor, "
@@ -250,8 +280,8 @@ _RESPONSE_SHAPE_HINT = """
   "title": "A short, original academic title you write yourself",
   "sections": [
     {"section_type": "presentation", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "introduction", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "body", "title": "...", "nodes": [ BLOCK, ... ]},
+    {"section_type": "introduction", "title": "A specific, content-descriptive heading — never the generic word 'Introducción'", "nodes": [ BLOCK, ... ]},
+    {"section_type": "body", "title": "internal label only, never rendered", "nodes": [ {"type": "heading-2", ...}, BLOCK, ... ]},
     {"section_type": "conclusion", "title": "...", "nodes": [ BLOCK, ... ]},
     {"section_type": "sources", "title": "...", "nodes": [ BLOCK, ... ]}
   ],
@@ -338,10 +368,12 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
     ) -> list[APASection]:
         """Drops any 'index' section the model produced despite being told
         not to (defensive — see rule 9 / rule 10 in the system prompts),
-        rebuilds it from scratch from the real headings, guarantees the
-        mandatory APA 7 page breaks are actually present in the tree
-        (defensive — see the page-break rule in _NODE_SCHEMA_RULES), and
-        returns the full section list in canonical APA 7 order.
+        rebuilds it from scratch (build_index_section() is a pure
+        placeholder — see that module's docstring for why it needs no
+        input), guarantees the mandatory APA 7 page breaks are actually
+        present in the tree (defensive — see the page-break rule in
+        _NODE_SCHEMA_RULES), and returns the full section list in
+        canonical APA 7 order.
 
         Doing this here — on the persisted node tree itself, not as an
         export-time side effect — is what keeps the WYSIWYG editor and the
@@ -358,7 +390,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             for s in without_index
         ]
         index_section = _ensure_trailing_page_break(
-            build_index_section(without_index)
+            build_index_section()
         )
         finalized = without_index + [index_section]
         finalized.sort(key=lambda s: s.section_type.order)

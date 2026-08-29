@@ -144,7 +144,6 @@ class DocumentNode:
     src: str | None = None
     alt: str | None = None
     caption: str | None = None
-    entries: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         is_leaf = self.text is not None
@@ -169,10 +168,6 @@ class DocumentNode:
                 raise DocumentBuildError(
                     "'src'/'alt'/'caption' only apply to 'image' nodes."
                 )
-            if self.entries:
-                raise DocumentBuildError(
-                    "'entries' only applies to 'table-of-contents' nodes."
-                )
             return
 
         if self.type not in BLOCK_TYPES:
@@ -189,32 +184,22 @@ class DocumentNode:
                 )
             if not self.src:
                 raise DocumentBuildError("An 'image' node requires 'src'.")
-            if self.entries:
-                raise DocumentBuildError(
-                    "'entries' only applies to 'table-of-contents' nodes."
-                )
             return
 
         if self.type == TABLE_OF_CONTENTS:
             if self.children:
                 raise DocumentBuildError(
                     "A 'table-of-contents' node cannot have 'children' — "
-                    "it is a non-editable widget, not rich text."
+                    "it is a non-editable widget, not rich text. The real, "
+                    "paginated entries are computed by the PDF exporter "
+                    "itself from the heading-1/heading-2 paragraphs "
+                    "rendered elsewhere in the document — this node is a "
+                    "pure placeholder and carries no data of its own."
                 )
             if self.src or self.alt or self.caption:
                 raise DocumentBuildError(
                     "'src'/'alt'/'caption' only apply to 'image' nodes."
                 )
-            for entry in self.entries:
-                if not isinstance(entry, dict) or "text" not in entry:
-                    raise DocumentBuildError(
-                        f"Malformed table-of-contents entry: {entry!r}"
-                    )
-                if entry.get("level") not in (0, 1):
-                    raise DocumentBuildError(
-                        "A table-of-contents entry's 'level' must be 0 "
-                        f"(heading-1) or 1 (heading-2), got: {entry!r}"
-                    )
             return
 
         if self.type == PAGE_BREAK:
@@ -222,20 +207,15 @@ class DocumentNode:
                 raise DocumentBuildError(
                     "A 'page-break' node cannot have 'children'."
                 )
-            if self.src or self.alt or self.caption or self.entries:
+            if self.src or self.alt or self.caption:
                 raise DocumentBuildError(
-                    "A 'page-break' node cannot carry 'src'/'alt'/"
-                    "'caption'/'entries'."
+                    "A 'page-break' node cannot carry 'src'/'alt'/'caption'."
                 )
             return
 
         if self.src or self.alt or self.caption:
             raise DocumentBuildError(
                 "'src'/'alt'/'caption' only apply to 'image' nodes."
-            )
-        if self.entries:
-            raise DocumentBuildError(
-                "'entries' only applies to 'table-of-contents' nodes."
             )
         if not self.children:
             raise DocumentBuildError(
@@ -274,8 +254,8 @@ class DocumentNode:
             return self.text
         if self.type == IMAGE:
             return self.caption or self.alt or ""
-        if self.type == TABLE_OF_CONTENTS:
-            return " ".join(e.get("text", "") for e in self.entries)
+        if self.type in (TABLE_OF_CONTENTS, PAGE_BREAK):
+            return ""
         return "".join(c.plain_text() for c in self.children)
 
     def to_dict(self) -> dict[str, Any]:
@@ -302,7 +282,6 @@ class DocumentNode:
             return out
 
         if self.type == TABLE_OF_CONTENTS:
-            out["entries"] = [dict(e) for e in self.entries]
             return out
 
         if self.type == PAGE_BREAK:
@@ -349,13 +328,11 @@ class DocumentNode:
             )
 
         if node_type == TABLE_OF_CONTENTS:
-            raw_entries = data.get("entries") or ()
             return cls(
                 type=node_type,
                 id=node_id,
                 section_type=data.get("section_type"),
                 styles=styles,
-                entries=tuple(raw_entries),
             )
 
         if node_type == PAGE_BREAK:
@@ -487,7 +464,6 @@ def table_cell_node(
 
 
 def table_of_contents_node(
-    entries: Sequence[dict[str, Any]] = (),
     *,
     section_type: str | None = None,
     node_id: str | None = None,
@@ -496,5 +472,4 @@ def table_of_contents_node(
         type=TABLE_OF_CONTENTS,
         id=node_id or _next_id(),
         section_type=section_type,
-        entries=tuple(dict(e) for e in entries),
     )
