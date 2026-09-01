@@ -70,12 +70,21 @@ class DocumentOutput:
 
 
 @dataclass(frozen=True)
+class DocumentFileOutput:
+    document: DocumentOutput
+    file_bytes: bytes
+    file_name: str
+    content_type: str
+
+
+@dataclass(frozen=True)
 class UpdateDocumentInput:
     document_id: UUID
     user_id: UUID
     title: str | None = None
     sections: list[APASection] | None = None
     presentation: PresentationInfo | None = None
+    docx_bytes: bytes | None = None
 
 
 @dataclass(frozen=True)

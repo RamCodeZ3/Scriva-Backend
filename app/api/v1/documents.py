@@ -1,24 +1,10 @@
 from __future__ import annotations
 
 import base64
+import json
+from io import BytesIO
+from urllib.parse import quote
 from uuid import UUID
-
-from fastapi import APIRouter, Depends, HTTPException, status
-
-from domain.entities.user import User
-from domain.value_objects.apa_structure import (
-    APA7_DOCUMENT_STYLES,
-    APASection,
-    APASectionType,
-)
-from domain.value_objects.document_node import (
-    HEADING_1,
-    IMAGE,
-    DocumentNode,
-    Mark,
-)
-from domain.value_objects.document_type import DocumentType
-from domain.value_objects.presentation_info import PresentationInfo
 
 from application.dtos.document_dtos import (
     AugmentDocumentInput,
@@ -26,6 +12,7 @@ from application.dtos.document_dtos import (
     ExportDocumentInput,
     UpdateDocumentInput,
 )
+from application.exceptions import UserNotFoundError
 from application.use_cases.augment_document_use_case import (
     AugmentDocumentUseCase,
 )
@@ -39,13 +26,25 @@ from application.use_cases.export_document_use_case import (
     ExportDocumentUseCase,
 )
 from application.use_cases.get_document_use_case import GetDocumentUseCase
-from application.use_cases.update_document_use_case import (
-    UpdateDocumentUseCase,
-)
 from application.use_cases.list_user_documents_use_case import (
     ListUserDocumentsUseCase,
 )
-from application.exceptions import UserNotFoundError
+from application.use_cases.update_document_use_case import (
+    UpdateDocumentUseCase,
+)
+from domain.entities.user import User
+from domain.value_objects.document_type import DocumentType
+from domain.value_objects.presentation_info import PresentationInfo
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    status,
+)
+from fastapi.responses import StreamingResponse
 
 from api.deps import (
     get_augment_document_use_case,
@@ -54,35 +53,48 @@ from api.deps import (
     get_delete_document_use_case,
     get_export_document_use_case,
     get_get_document_use_case,
-    get_update_document_use_case,
     get_list_user_documents_use_case,
+    get_update_document_use_case,
 )
 from api.schemas.documents import (
     AugmentDocumentRequest,
     CreateDocumentRequest,
-    DocumentResponse,
     DeleteDocumentResponse,
-    DocumentMetaOut,
-    DocumentNodeOut,
+    DocumentMetadataResponse,
     DocumentPatchResponse,
-    DocumentStylesOut,
-    ExportDocumentResponse,
-    MarkOut,
-    PresentationOut,
-    UpdateDocumentRequest,
     DocumentReferenceResponse,
-    SourceErrorOut,
+    ExportDocumentResponse,
 )
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
+DOCX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
 
 
-@router.post("/", response_model=DocumentResponse)
+@router.post(
+    "/",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": (
+                "Generated DOCX; metadata is in X-Document-Metadata."
+            ),
+            "content": {DOCX_MEDIA_TYPE: {}},
+            "headers": {
+                "X-Document-Metadata": {
+                    "schema": {"type": "string"},
+                    "description": "JSON matching DocumentMetadataResponse.",
+                }
+            },
+        }
+    },
+)
 async def create_document(
     body: CreateDocumentRequest,
     current_user: User = Depends(get_current_user),
     use_case: CreateDocumentUseCase = Depends(get_create_document_use_case),
-) -> DocumentResponse:
+) -> StreamingResponse:
     try:
         document_type = DocumentType(body.document_type)
     except ValueError as exc:
@@ -110,22 +122,7 @@ async def create_document(
 
     result = await use_case.execute(data)
 
-    return DocumentResponse(
-        id=str(result.id),
-        title=result.title,
-        document_type=result.document_type.value,
-        status=result.status.value,
-        meta=DocumentMetaOut(title=result.title),
-        document_styles=_styles_out(result),
-        document_nodes=_nodes_out(result.sections),
-        user_id=str(result.user_id),
-        presentation=_presentation_out(result.presentation),
-        document_error=result.error_message,
-        sources_error=_sources_error_out(result),
-        source_ids=[str(sid) for sid in result.source_ids],
-        created_at=result.created_at.isoformat(),
-        updated_at=result.updated_at.isoformat(),
-    )
+    return _docx_response(result)
 
 
 @router.post(
@@ -166,39 +163,53 @@ async def export_document(
     )
 
 
-@router.get("/{document_id}", response_model=DocumentResponse)
+@router.get(
+    "/{document_id}",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {DOCX_MEDIA_TYPE: {}},
+            "headers": {
+                "X-Document-Metadata": {
+                    "schema": {"type": "string"},
+                    "description": "JSON matching DocumentMetadataResponse.",
+                }
+            },
+        }
+    },
+)
 async def get_document(
     document_id: UUID,
     current_user: User = Depends(get_current_user),
     use_case: GetDocumentUseCase = Depends(get_get_document_use_case),
-) -> DocumentResponse:
+) -> StreamingResponse:
     result = await use_case.execute(document_id, current_user.id)
 
-    return DocumentResponse(
-        id=str(result.id),
-        title=result.title,
-        document_type=result.document_type.value,
-        status=result.status.value,
-        meta=DocumentMetaOut(title=result.title),
-        document_styles=_styles_out(result),
-        document_nodes=_nodes_out(result.sections),
-        user_id=str(result.user_id),
-        presentation=_presentation_out(result.presentation),
-        document_error=result.error_message,
-        sources_error=_sources_error_out(result),
-        source_ids=[str(sid) for sid in result.source_ids],
-        created_at=result.created_at.isoformat(),
-        updated_at=result.updated_at.isoformat(),
-    )
+    return _docx_response(result)
 
 
-@router.patch("/ia/{document_id}", response_model=DocumentResponse)
+@router.patch(
+    "/ai/{document_id}",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "Updated DOCX; metadata is in X-Document-Metadata.",
+            "content": {DOCX_MEDIA_TYPE: {}},
+            "headers": {
+                "X-Document-Metadata": {
+                    "schema": {"type": "string"},
+                    "description": "JSON matching DocumentMetadataResponse.",
+                }
+            },
+        }
+    },
+)
 async def augment_document(
     document_id: UUID,
     body: AugmentDocumentRequest,
     current_user: User = Depends(get_current_user),
     use_case: AugmentDocumentUseCase = Depends(get_augment_document_use_case),
-) -> DocumentResponse:
+) -> StreamingResponse:
     data = AugmentDocumentInput(
         document_id=document_id,
         user_id=current_user.id,
@@ -207,57 +218,36 @@ async def augment_document(
     )
     result = await use_case.execute(data)
 
-    return DocumentResponse(
-        id=str(result.id),
-        title=result.title,
-        document_type=result.document_type.value,
-        status=result.status.value,
-        meta=DocumentMetaOut(title=result.title),
-        document_styles=_styles_out(result),
-        document_nodes=_nodes_out(result.sections),
-        user_id=str(result.user_id),
-        presentation=_presentation_out(result.presentation),
-        document_error=result.error_message,
-        sources_error=_sources_error_out(result),
-        source_ids=[str(sid) for sid in result.source_ids],
-        created_at=result.created_at.isoformat(),
-        updated_at=result.updated_at.isoformat(),
-    )
+    return _docx_response(result)
 
 
 @router.patch("/{document_id}", response_model=DocumentPatchResponse)
 async def update_document(
     document_id: UUID,
-    body: UpdateDocumentRequest,
+    title: str | None = Form(default=None),
+    document: UploadFile | None = File(default=None),
     current_user: User = Depends(get_current_user),
     use_case: UpdateDocumentUseCase = Depends(get_update_document_use_case),
 ) -> DocumentPatchResponse:
-    sections = None
-    if body.document_nodes is not None:
-        try:
-            sections = _sections_from_nodes(body.document_nodes)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid document_nodes: {exc}",
-            ) from exc
-
-    presentation = None
-    if body.presentation is not None:
-        presentation = PresentationInfo(
-            student_name=body.presentation.student_name,
-            professor=body.presentation.professor,
-            subject=body.presentation.subject,
-            student_id=body.presentation.student_id,
-            institution=body.presentation.institution,
+    if title is None and document is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Provide at least 'title' or a DOCX file.",
         )
+    docx_bytes = None
+    if document is not None:
+        if not (document.filename or "").lower().endswith(".docx"):
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="Only .docx files are accepted.",
+            )
+        docx_bytes = await document.read()
 
     data = UpdateDocumentInput(
         document_id=document_id,
         user_id=current_user.id,
-        title=body.title,
-        sections=sections,
-        presentation=presentation,
+        title=title,
+        docx_bytes=docx_bytes,
     )
     result = await use_case.execute(data)
 
@@ -265,11 +255,8 @@ async def update_document(
         id=str(result.id),
         title=result.title,
         document_type=result.document_type.value,
-        document_nodes=_nodes_out(result.sections),
         user_id=str(result.user_id),
-        presentation=_presentation_out(result.presentation),
-        document_error=result.error_message,
-        sources_error=_sources_error_out(result),
+        error_message=result.error_message,
         source_ids=[str(sid) for sid in result.source_ids],
         updated_at=result.updated_at.isoformat(),
     )
@@ -326,131 +313,34 @@ def _title_snippet(body: CreateDocumentRequest) -> str:
     return first.splitlines()[0][:80]
 
 
-def _styles_out(result) -> DocumentStylesOut:
-    # `result` is whatever DTO the use case returns; if it doesn't carry
-    # `document_styles` yet, fall back to the fixed APA7 defaults.
-    styles = {
-        **APA7_DOCUMENT_STYLES,
-        **(getattr(result, "document_styles", None) or {}),
-    }
-    return DocumentStylesOut(**styles)
-
-
-def _presentation_out(p: PresentationInfo) -> PresentationOut:
-    return PresentationOut(
-        student_name=p.student_name,
-        professor=p.professor,
-        subject=p.subject,
-        student_id=p.student_id,
-        institution=p.institution,
+def _metadata_out(result) -> DocumentMetadataResponse:
+    document = result.document
+    return DocumentMetadataResponse(
+        id=str(document.id),
+        title=document.title,
+        document_type=document.document_type.value,
+        status=document.status.value,
+        user_id=str(document.user_id),
+        error_message=document.error_message,
+        source_ids=[str(source_id) for source_id in document.source_ids],
+        created_at=document.created_at.isoformat(),
+        updated_at=document.updated_at.isoformat(),
     )
 
 
-def _node_out(node: DocumentNode) -> DocumentNodeOut:
-    if node.text is not None:
-        marks = [MarkOut(type=m.type, value=m.value) for m in node.marks]
-        return DocumentNodeOut(text=node.text, marks=marks or None)
-
-    if node.type == IMAGE:
-        return DocumentNodeOut(
-            id=node.id,
-            type=node.type,
-            section_type=node.section_type,
-            styles=dict(node.styles) if node.styles else None,
-            src=node.src,
-            alt=node.alt,
-            caption=node.caption,
-        )
-
-    return DocumentNodeOut(
-        id=node.id,
-        type=node.type,
-        section_type=node.section_type,
-        styles=dict(node.styles) if node.styles else None,
-        children=[_node_out(c) for c in node.children],
+def _docx_response(result) -> StreamingResponse:
+    metadata = _metadata_out(result)
+    disposition = f"attachment; filename*=UTF-8''{quote(result.file_name)}"
+    return StreamingResponse(
+        BytesIO(result.file_bytes),
+        media_type=result.content_type,
+        headers={
+            "Content-Disposition": disposition,
+            "X-Document-Metadata": json.dumps(
+                metadata.model_dump(mode="json"), ensure_ascii=True
+            ),
+            "Access-Control-Expose-Headers": (
+                "Content-Disposition, X-Document-Metadata"
+            ),
+        },
     )
-
-
-def _nodes_out(sections: list[APASection]) -> list[DocumentNodeOut]:
-    flat: list[DocumentNode] = []
-    for section in sections:
-        flat.append(section.heading)
-        flat.extend(section.body_nodes)
-    return [_node_out(n) for n in flat]
-
-
-def _node_from_out(node: DocumentNodeOut) -> DocumentNode:
-    if node.text is not None:
-        marks = tuple(
-            Mark(type=m.type, value=m.value) for m in (node.marks or ())
-        )
-        return DocumentNode(text=node.text, marks=marks)
-
-    if node.type == IMAGE:
-        return DocumentNode(
-            type=node.type,
-            id=node.id,
-            section_type=node.section_type,
-            styles=dict(node.styles or {}),
-            src=node.src,
-            alt=node.alt,
-            caption=node.caption,
-        )
-
-    return DocumentNode(
-        type=node.type,
-        id=node.id,
-        section_type=node.section_type,
-        styles=dict(node.styles or {}),
-        children=tuple(_node_from_out(c) for c in (node.children or ())),
-    )
-
-
-def _sections_from_nodes(nodes: list[DocumentNodeOut]) -> list[APASection]:
-    heading: DocumentNode | None = None
-    section_type: APASectionType | None = None
-    body: list[DocumentNode] = []
-    sections: list[APASection] = []
-
-    def _flush() -> None:
-        if heading is not None:
-            sections.append(
-                APASection(
-                    section_type=section_type,
-                    heading=heading,
-                    body_nodes=tuple(body),
-                )
-            )
-
-    for out_node in nodes:
-        node = _node_from_out(out_node)
-        if node.type == HEADING_1:
-            _flush()
-            heading = node
-            body = []
-            if node.section_type is None:
-                raise ValueError(
-                    "A 'heading-1' node is missing its 'section_type'."
-                )
-            try:
-                section_type = APASectionType(node.section_type)
-            except ValueError as exc:
-                raise ValueError(
-                    f"Unknown section_type: {node.section_type!r}"
-                ) from exc
-        else:
-            if heading is None:
-                raise ValueError(
-                    "document_nodes must start with a 'heading-1' node."
-                )
-            body.append(node)
-
-    _flush()
-    return sections
-
-
-def _sources_error_out(result) -> list[SourceErrorOut]:
-    return [
-        SourceErrorOut(source_id=str(e.source_id), raw=e.raw, error=e.error)
-        for e in getattr(result, "source_errors", None) or []
-    ]

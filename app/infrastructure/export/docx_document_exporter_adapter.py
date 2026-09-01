@@ -62,6 +62,7 @@ _HIGHLIGHT_PALETTE = {
     WD_COLOR_INDEX.BLUE: "0000FF",
     WD_COLOR_INDEX.GRAY_25: "BFBFBF",
 }
+_SECTION_ATTR = "{urn:scriva:document}section-type"
 
 
 class DocxDocumentExporterAdapter(DocumentExporterPort):
@@ -110,6 +111,7 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
 
     def _build_cover_page(self, docx, document: Document, ctx: dict) -> None:
         title_p = docx.add_paragraph(style=ctx["styles"]["TitleCover"])
+        _mark_section(title_p._p, APASectionType.PRESENTATION)
         title_p.add_run(document.title)
 
         section = document.get_section(APASectionType.PRESENTATION)
@@ -134,6 +136,7 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
         # itself as a TOC entry — same reasoning as the PDF adapter's
         # "Heading1Plain" vs "Heading1".
         heading = docx.add_paragraph(style=ctx["styles"]["Heading1Plain"])
+        _mark_section(heading._p, APASectionType.INDEX)
         heading.add_run(index_title)
 
         if index_section is None:
@@ -164,14 +167,22 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
 
         if section_type is not APASectionType.BODY:
             heading = docx.add_paragraph(style=ctx["styles"]["Heading1"])
+            _mark_section(heading._p, section_type)
             heading.add_run(section.title)
-        for node in section.body_nodes:
+        for index, node in enumerate(section.body_nodes):
             _render_block(docx, node, ctx)
+            if section_type is APASectionType.BODY and index == 0:
+                body_elements = list(docx.element.body)
+                # python-docx keeps sectPr as the final body child and
+                # inserts new paragraphs/tables immediately before it.
+                if len(body_elements) >= 2:
+                    _mark_section(body_elements[-2], section_type)
 
     def _build_references(self, docx, document: Document, ctx: dict) -> None:
         sources_section = document.get_section(APASectionType.SOURCES)
         title = sources_section.title if sources_section else "References"
         heading = docx.add_paragraph(style=ctx["styles"]["Heading1"])
+        _mark_section(heading._p, APASectionType.SOURCES)
         heading.add_run(title)
 
         for ref in sorted(
@@ -182,6 +193,11 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
         if not document.sources:
             p = docx.add_paragraph(style=ctx["styles"]["Body"])
             p.add_run("No sources were provided.")
+
+
+def _mark_section(element, section_type: APASectionType) -> None:
+    """Embed a non-rendered round-trip marker in the OOXML element."""
+    element.set(_SECTION_ATTR, section_type.value)
 
 
 # --- page setup -----------------------------------------------------------
