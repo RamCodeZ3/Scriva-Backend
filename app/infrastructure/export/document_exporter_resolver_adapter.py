@@ -12,6 +12,9 @@ from application.ports.google_credentials_port import GoogleCredentialsPort
 from infrastructure.auth.google_oauth_token_provider import (
     GoogleOAuthTokenProvider,
 )
+from infrastructure.export.docx_document_exporter_adapter import (
+    DocxDocumentExporterAdapter,
+)
 from infrastructure.export.google_docs_exporter_adapter import (
     GoogleDocsExporterAdapter,
 )
@@ -53,9 +56,7 @@ class DocumentExporterResolverAdapter(DocumentExporterResolverPort):
             return GoogleDocsExporterAdapter(user_access_token=access_token)
 
         if export_target == "docx":
-            raise UnsupportedExportTargetError(
-                "docx export isn't implemented yet."
-            )
+            return DocxDocumentExporterAdapter()
 
         raise UnsupportedExportTargetError(
             f"Unknown export target '{export_target}'."

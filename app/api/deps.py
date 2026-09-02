@@ -4,16 +4,11 @@ import os
 from functools import lru_cache
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException, status
-
-from domain.entities.source import SourceType
-from domain.entities.user import User
-
-from dotenv import load_dotenv
-
+from application.ports.document_buffer_port import DocumentBufferPort
 from application.ports.document_exporter_resolver_port import (
     DocumentExporterResolverPort,
 )
+from application.ports.document_parser_port import DocumentParserPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
@@ -33,16 +28,19 @@ from application.use_cases.export_document_use_case import (
     ExportDocumentUseCase,
 )
 from application.use_cases.get_document_use_case import GetDocumentUseCase
+from application.use_cases.list_user_documents_use_case import (
+    ListUserDocumentsUseCase,
+)
 from application.use_cases.process_document_use_case import (
     ProcessDocumentUseCase,
 )
 from application.use_cases.update_document_use_case import (
     UpdateDocumentUseCase,
 )
-from application.use_cases.list_user_documents_use_case import (
-    ListUserDocumentsUseCase,
-)
-
+from domain.entities.source import SourceType
+from domain.entities.user import User
+from dotenv import load_dotenv
+from fastapi import Depends, Header, HTTPException, status
 from infrastructure.ai.gemini_document_writer_adapter import (
     GeminiDocumentWriterAdapter,
 )
@@ -55,6 +53,9 @@ from infrastructure.auth.supabase_jwt_auth import (
 )
 from infrastructure.export.document_exporter_resolver_adapter import (
     DocumentExporterResolverAdapter,
+)
+from infrastructure.export.docx_document_exporter_adapter import (
+    DocxDocumentExporterAdapter,
 )
 from infrastructure.export.pdf_document_exporter_adapter import (
     PdfDocumentExporterAdapter,
@@ -75,6 +76,12 @@ from infrastructure.extractors.youtube_extractor_adapter import (
 from infrastructure.jobs.sync_job_dispatcher_adapter import (
     SyncJobDispatcherAdapter,
 )
+from infrastructure.parsers.docx_document_parser_adapter import (
+    DocxDocumentParserAdapter,
+)
+from infrastructure.persistence.in_memory_document_buffer import (
+    InMemoryDocumentBuffer,
+)
 from infrastructure.persistence.supabase_client import build_supabase_client
 from infrastructure.persistence.supabase_document_repository import (
     SupabaseDocumentRepository,
@@ -88,7 +95,6 @@ from infrastructure.persistence.supabase_source_repository import (
 from infrastructure.persistence.supabase_user_repository import (
     SupabaseUserRepository,
 )
-
 
 # ── Process-wide singletons ─────────────────────────────────────────────
 
@@ -148,6 +154,21 @@ def get_google_oauth_token_provider() -> GoogleOAuthTokenProvider:
 @lru_cache
 def get_pdf_document_exporter() -> PdfDocumentExporterAdapter:
     return PdfDocumentExporterAdapter()
+
+
+@lru_cache
+def get_docx_document_exporter() -> DocxDocumentExporterAdapter:
+    return DocxDocumentExporterAdapter()
+
+
+@lru_cache
+def get_document_parser() -> DocumentParserPort:
+    return DocxDocumentParserAdapter()
+
+
+@lru_cache
+def get_document_buffer() -> DocumentBufferPort:
+    return InMemoryDocumentBuffer()
 
 
 @lru_cache
@@ -255,6 +276,8 @@ def get_create_document_use_case(
     process_use_case: ProcessDocumentUseCase = Depends(
         get_process_document_use_case
     ),
+    exporter=Depends(get_docx_document_exporter),
+    buffer: DocumentBufferPort = Depends(get_document_buffer),
 ) -> CreateDocumentUseCase:
     dispatcher = SyncJobDispatcherAdapter(process_use_case)
     return CreateDocumentUseCase(
@@ -262,6 +285,8 @@ def get_create_document_use_case(
         source_repository=source_repository,
         user_repository=user_repository,
         job_dispatcher=dispatcher,
+        exporter=exporter,
+        buffer=buffer,
     )
 
 
@@ -269,24 +294,29 @@ def get_get_document_use_case(
     document_repository: DocumentRepositoryPort = Depends(
         get_document_repository
     ),
+    exporter=Depends(get_docx_document_exporter),
+    buffer: DocumentBufferPort = Depends(get_document_buffer),
 ) -> GetDocumentUseCase:
-    return GetDocumentUseCase(document_repository)
+    return GetDocumentUseCase(document_repository, exporter, buffer)
 
 
 def get_update_document_use_case(
     document_repository: DocumentRepositoryPort = Depends(
         get_document_repository
     ),
+    parser: DocumentParserPort = Depends(get_document_parser),
+    buffer: DocumentBufferPort = Depends(get_document_buffer),
 ) -> UpdateDocumentUseCase:
-    return UpdateDocumentUseCase(document_repository)
+    return UpdateDocumentUseCase(document_repository, parser, buffer)
 
 
 def get_delete_document_use_case(
     document_repository: DocumentRepositoryPort = Depends(
         get_document_repository
     ),
+    buffer: DocumentBufferPort = Depends(get_document_buffer),
 ) -> DeleteDocumentUseCase:
-    return DeleteDocumentUseCase(document_repository)
+    return DeleteDocumentUseCase(document_repository, buffer)
 
 
 def get_augment_document_use_case(
@@ -296,12 +326,16 @@ def get_augment_document_use_case(
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
     extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
     document_writer: DocumentWriterPort = Depends(get_document_writer),
+    exporter=Depends(get_docx_document_exporter),
+    buffer: DocumentBufferPort = Depends(get_document_buffer),
 ) -> AugmentDocumentUseCase:
     return AugmentDocumentUseCase(
         document_repository=document_repository,
         source_repository=source_repository,
         extractor_factory=extractor_factory,
         document_writer=document_writer,
+        exporter=exporter,
+        buffer=buffer,
     )
 
 

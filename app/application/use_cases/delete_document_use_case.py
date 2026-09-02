@@ -4,12 +4,18 @@ from application.exceptions import (
     DocumentAccessDeniedError,
     DocumentNotFoundError,
 )
+from application.ports.document_buffer_port import DocumentBufferPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 
 
 class DeleteDocumentUseCase:
-    def __init__(self, document_repository: DocumentRepositoryPort) -> None:
+    def __init__(
+        self,
+        document_repository: DocumentRepositoryPort,
+        buffer: DocumentBufferPort,
+    ) -> None:
         self._documents = document_repository
+        self._buffer = buffer
 
     async def execute(self, document_id: UUID, user_id: UUID) -> None:
         document = await self._documents.get_by_id(document_id)
@@ -22,3 +28,4 @@ class DeleteDocumentUseCase:
                 f"Document '{document_id}' does not belong to this account."
             )
         await self._documents.delete(document_id)
+        await self._buffer.delete(document_id)

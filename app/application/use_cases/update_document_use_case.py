@@ -7,12 +7,21 @@ from application.exceptions import (
     DocumentAccessDeniedError,
     DocumentNotFoundError,
 )
+from application.ports.document_buffer_port import DocumentBufferPort
+from application.ports.document_parser_port import DocumentParserPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 
 
 class UpdateDocumentUseCase:
-    def __init__(self, document_repository: DocumentRepositoryPort) -> None:
+    def __init__(
+        self,
+        document_repository: DocumentRepositoryPort,
+        parser: DocumentParserPort,
+        buffer: DocumentBufferPort,
+    ) -> None:
         self._documents = document_repository
+        self._parser = parser
+        self._buffer = buffer
 
     async def execute(self, data: UpdateDocumentInput) -> DocumentOutput:
         document = await self._documents.get_by_id(data.document_id)
@@ -25,12 +34,17 @@ class UpdateDocumentUseCase:
                 f"Document '{data.document_id}' does not belong to this account."
             )
 
+        sections = data.sections
+        if data.docx_bytes is not None:
+            sections = await self._parser.parse(data.docx_bytes)
+
         document.update_content(
             title=data.title,
-            sections=data.sections,
+            sections=sections,
             presentation=data.presentation,
         )
         await self._documents.save(document)
+        await self._buffer.delete(document.id)
 
         return DocumentOutput(
             id=document.id,

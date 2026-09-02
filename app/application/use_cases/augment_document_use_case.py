@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from domain.entities.document import DocumentStatus
+from domain.entities.source import Source
+from domain.exceptions import DocumentBuildError
+
 from application.dtos.document_dtos import (
     AugmentDocumentInput,
+    DocumentFileOutput,
     DocumentOutput,
     build_source_errors,
 )
@@ -10,14 +15,12 @@ from application.exceptions import (
     DocumentNotFoundError,
     NoSourcesExtractedError,
 )
+from application.ports.document_buffer_port import DocumentBufferPort
+from application.ports.document_exporter_port import DocumentExporterPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
 from application.ports.source_repository_port import SourceRepositoryPort
-
-from domain.entities.document import DocumentStatus
-from domain.entities.source import Source
-from domain.exceptions import DocumentBuildError
 
 
 class AugmentDocumentUseCase:
@@ -27,13 +30,17 @@ class AugmentDocumentUseCase:
         source_repository: SourceRepositoryPort,
         extractor_factory: ExtractorFactoryPort,
         document_writer: DocumentWriterPort,
+        exporter: DocumentExporterPort,
+        buffer: DocumentBufferPort,
     ) -> None:
         self._documents = document_repository
         self._sources = source_repository
         self._extractor_factory = extractor_factory
         self._writer = document_writer
+        self._exporter = exporter
+        self._buffer = buffer
 
-    async def execute(self, data: AugmentDocumentInput) -> DocumentOutput:
+    async def execute(self, data: AugmentDocumentInput) -> DocumentFileOutput:
         document = await self._documents.get_by_id(data.document_id)
         if document is None:
             raise DocumentNotFoundError(
@@ -84,7 +91,7 @@ class AugmentDocumentUseCase:
         )
         await self._documents.save(document)
 
-        return DocumentOutput(
+        metadata = DocumentOutput(
             id=document.id,
             title=document.title,
             document_type=document.document_type,
@@ -97,6 +104,16 @@ class AugmentDocumentUseCase:
             source_errors=build_source_errors(document.raw_sources),
             created_at=document.created_at,
             updated_at=document.updated_at,
+        )
+        exported = await self._exporter.export(document)
+        await self._buffer.put(document.id, exported)
+        if exported.file_bytes is None:
+            raise RuntimeError("The DOCX exporter returned no binary content.")
+        return DocumentFileOutput(
+            document=metadata,
+            file_bytes=exported.file_bytes,
+            file_name=exported.file_name or f"{document.id}.docx",
+            content_type=exported.content_type or "application/octet-stream",
         )
 
     async def _extract_sources(self, sources: list[Source]) -> list[Source]:
