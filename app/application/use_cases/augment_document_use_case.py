@@ -15,12 +15,13 @@ from application.exceptions import (
     DocumentNotFoundError,
     NoSourcesExtractedError,
 )
-from application.ports.document_buffer_port import DocumentBufferPort
 from application.ports.document_exporter_port import DocumentExporterPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
+from application.ports.docx_cache_port import DocxCachePort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
 from application.ports.source_repository_port import SourceRepositoryPort
+from application.services.document_docx_cache import cache_docx
 
 
 class AugmentDocumentUseCase:
@@ -31,14 +32,14 @@ class AugmentDocumentUseCase:
         extractor_factory: ExtractorFactoryPort,
         document_writer: DocumentWriterPort,
         exporter: DocumentExporterPort,
-        buffer: DocumentBufferPort,
+        cache: DocxCachePort,
     ) -> None:
         self._documents = document_repository
         self._sources = source_repository
         self._extractor_factory = extractor_factory
         self._writer = document_writer
         self._exporter = exporter
-        self._buffer = buffer
+        self._cache = cache
 
     async def execute(self, data: AugmentDocumentInput) -> DocumentFileOutput:
         document = await self._documents.get_by_id(data.document_id)
@@ -48,11 +49,13 @@ class AugmentDocumentUseCase:
             )
         if document.user_id != data.user_id:
             raise DocumentAccessDeniedError(
-                f"Document '{data.document_id}' does not belong to this account."
+                f"Document '{data.document_id}' does not belong to this "
+                "account."
             )
         if document.status != DocumentStatus.DONE:
             raise DocumentBuildError(
-                f"Cannot add info to a document in '{document.status.value}' status; "
+                "Cannot add info to a document in "
+                f"'{document.status.value}' status; "
                 "it must be 'done'."
             )
 
@@ -106,9 +109,14 @@ class AugmentDocumentUseCase:
             updated_at=document.updated_at,
         )
         exported = await self._exporter.export(document)
-        await self._buffer.put(document.id, exported)
         if exported.file_bytes is None:
             raise RuntimeError("The DOCX exporter returned no binary content.")
+        await cache_docx(
+            self._cache,
+            document,
+            exported.file_bytes,
+            invalidate_existing=True,
+        )
         return DocumentFileOutput(
             document=metadata,
             file_bytes=exported.file_bytes,

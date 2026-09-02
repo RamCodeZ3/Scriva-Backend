@@ -7,9 +7,11 @@ from application.exceptions import (
     DocumentAccessDeniedError,
     DocumentNotFoundError,
 )
-from application.ports.document_buffer_port import DocumentBufferPort
+from application.ports.document_exporter_port import DocumentExporterPort
 from application.ports.document_parser_port import DocumentParserPort
 from application.ports.document_repository_port import DocumentRepositoryPort
+from application.ports.docx_cache_port import DocxCachePort
+from application.services.document_docx_cache import cache_docx
 
 
 class UpdateDocumentUseCase:
@@ -17,11 +19,13 @@ class UpdateDocumentUseCase:
         self,
         document_repository: DocumentRepositoryPort,
         parser: DocumentParserPort,
-        buffer: DocumentBufferPort,
+        exporter: DocumentExporterPort,
+        cache: DocxCachePort,
     ) -> None:
         self._documents = document_repository
         self._parser = parser
-        self._buffer = buffer
+        self._exporter = exporter
+        self._cache = cache
 
     async def execute(self, data: UpdateDocumentInput) -> DocumentOutput:
         document = await self._documents.get_by_id(data.document_id)
@@ -31,7 +35,8 @@ class UpdateDocumentUseCase:
             )
         if document.user_id != data.user_id:
             raise DocumentAccessDeniedError(
-                f"Document '{data.document_id}' does not belong to this account."
+                f"Document '{data.document_id}' does not belong to this "
+                "account."
             )
 
         sections = data.sections
@@ -44,7 +49,21 @@ class UpdateDocumentUseCase:
             presentation=data.presentation,
         )
         await self._documents.save(document)
-        await self._buffer.delete(document.id)
+
+        docx_bytes = data.docx_bytes
+        if docx_bytes is None:
+            exported = await self._exporter.export(document)
+            if exported.file_bytes is None:
+                raise RuntimeError(
+                    "The DOCX exporter returned no binary content."
+                )
+            docx_bytes = exported.file_bytes
+        await cache_docx(
+            self._cache,
+            document,
+            docx_bytes,
+            invalidate_existing=True,
+        )
 
         return DocumentOutput(
             id=document.id,

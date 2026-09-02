@@ -32,6 +32,7 @@ Turn raw, unstructured source material into a fully structured, properly cited d
 - **Playwright** — Extracts text and relevant content from web pages, including dynamic, JavaScript-rendered sites.
 - **Google Docs API** — Creates, formats, and exports the final document with the requested layout and styling.
 - **Supabase** — Stores the user database, source metadata, and processing status records.
+- **DiskCache** — Stores compiled DOCX binaries on local disk with content-addressed keys and LRU eviction.
 - **reportlab** — Generates PDF output for the final documents.
 - **youtube-transcript-api** — Retrieves transcripts from YouTube videos as a source input.
 
