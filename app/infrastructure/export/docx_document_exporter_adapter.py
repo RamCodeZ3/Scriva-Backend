@@ -5,15 +5,22 @@ import re
 from io import BytesIO
 from urllib.request import urlopen
 
+from application.dtos.export_result import ExportResult
+from application.ports.document_exporter_port import DocumentExporterPort
 from docx import Document as DocxDocument
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_COLOR_INDEX
 from docx.enum.section import WD_ORIENT
 from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.text import (
+    WD_ALIGN_PARAGRAPH,
+    WD_BREAK,
+    WD_COLOR_INDEX,
+    WD_TAB_ALIGNMENT,
+    WD_TAB_LEADER,
+)
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Pt, Inches, Mm, RGBColor
-from docx.opc.constants import RELATIONSHIP_TYPE as RT
-
+from docx.shared import Inches, Pt, RGBColor
 from domain.entities.document import Document
 from domain.exceptions import DocumentBuildError
 from domain.value_objects.apa_structure import (
@@ -36,9 +43,9 @@ from domain.value_objects.document_node import (
     DocumentNode,
 )
 
-from application.dtos.export_result import ExportResult
-from application.ports.document_exporter_port import DocumentExporterPort
-
+from infrastructure.export.pdf_document_exporter_adapter import (
+    PdfDocumentExporterAdapter,
+)
 
 _PAGE_SIZES_IN = {"letter": (8.5, 11.0), "a4": (8.2677, 11.6929)}
 _ALIGN_MAP = {
@@ -83,6 +90,7 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
         )
 
     def _build_sync(self, document: Document) -> bytes:
+        toc_entries = PdfDocumentExporterAdapter().build_toc_entries(document)
         doc_styles = normalize_document_styles(document.document_styles)
         docx = DocxDocument()
         content_width_pt = _setup_page(docx, doc_styles)
@@ -94,7 +102,7 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
 
         self._build_cover_page(docx, document, ctx)
         docx.add_page_break()
-        self._build_toc_page(docx, document, ctx)
+        self._build_toc_page(docx, document, ctx, toc_entries)
 
         for section_type in (
             APASectionType.INTRODUCTION,
@@ -128,7 +136,13 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
             # institution lines, not rich prose).
             line.add_run(node.plain_text())
 
-    def _build_toc_page(self, docx, document: Document, ctx: dict) -> None:
+    def _build_toc_page(
+        self,
+        docx,
+        document: Document,
+        ctx: dict,
+        toc_entries: list[tuple[int, str, int]],
+    ) -> None:
         index_section = document.get_section(APASectionType.INDEX)
         index_title = index_section.title if index_section else "Índice"
 
@@ -143,12 +157,12 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
             # Defensive fallback for a document somehow missing its index
             # section entirely (should not happen) — still emit a working
             # TOC field.
-            _insert_toc_field(docx)
+            _insert_toc_field(docx, toc_entries, ctx["content_width_pt"])
             return
 
         for node in index_section.body_nodes:
             if node.type == TABLE_OF_CONTENTS:
-                _insert_toc_field(docx)
+                _insert_toc_field(docx, toc_entries, ctx["content_width_pt"])
             elif node.type == PAGE_BREAK:
                 docx.add_page_break()
             else:
@@ -206,12 +220,20 @@ def _mark_section(element, section_type: APASectionType) -> None:
 def _setup_page(docx, doc_styles: dict) -> float:
     section = docx.sections[0]
     width_in, height_in = _resolve_page_size(doc_styles)
-    landscape = str(doc_styles.get("orientation", "portrait")).lower() == "landscape"
+    landscape = (
+        str(doc_styles.get("orientation", "portrait")).lower() == "landscape"
+    )
     if landscape:
-        width_in, height_in = max(width_in, height_in), min(width_in, height_in)
+        width_in, height_in = (
+            max(width_in, height_in),
+            min(width_in, height_in),
+        )
         section.orientation = WD_ORIENT.LANDSCAPE
     else:
-        width_in, height_in = min(width_in, height_in), max(width_in, height_in)
+        width_in, height_in = (
+            min(width_in, height_in),
+            max(width_in, height_in),
+        )
         section.orientation = WD_ORIENT.PORTRAIT
     section.page_width = Inches(width_in)
     section.page_height = Inches(height_in)
@@ -255,7 +277,11 @@ def _setup_page_numbers(docx, doc_styles: dict) -> None:
         container = section.header
         align = WD_ALIGN_PARAGRAPH.RIGHT
 
-    p = container.paragraphs[0] if container.paragraphs else container.add_paragraph()
+    p = (
+        container.paragraphs[0]
+        if container.paragraphs
+        else container.add_paragraph()
+    )
     p.alignment = align
     p.text = ""
     _add_field(p, "PAGE", cached_text="1")
@@ -291,10 +317,21 @@ def _build_styles(docx, doc_styles: dict) -> dict[str, str]:
     normal.font.color.rgb = RGBColor.from_string(text_color)
     normal.paragraph_format.line_spacing = line_height
 
-    def make(name, *, base="Normal", bold=False, italic=False, size=None,
-             align=None, space_before=None, space_after=None,
-             left_indent=None, right_indent=None, first_line_indent=None,
-             outline_level=None):
+    def make(
+        name,
+        *,
+        base="Normal",
+        bold=False,
+        italic=False,
+        size=None,
+        align=None,
+        space_before=None,
+        space_after=None,
+        left_indent=None,
+        right_indent=None,
+        first_line_indent=None,
+        outline_level=None,
+    ):
         style = docx.styles.add_style(name, docx.styles["Normal"].type)
         style.base_style = docx.styles[base]
         style.font.bold = bold
@@ -327,59 +364,99 @@ def _build_styles(docx, doc_styles: dict) -> dict[str, str]:
 
     return {
         "TitleCover": make(
-            "APA Title Cover", bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
-            space_before=180, space_after=36,
+            "APA Title Cover",
+            bold=True,
+            align=WD_ALIGN_PARAGRAPH.CENTER,
+            space_before=180,
+            space_after=36,
         ),
         "CoverLine": make(
-            "APA Cover Line", align=WD_ALIGN_PARAGRAPH.CENTER, space_after=6,
+            "APA Cover Line",
+            align=WD_ALIGN_PARAGRAPH.CENTER,
+            space_after=6,
         ),
         # Registers as TOC level 1.
         "Heading1": make_heading(
-            "APA Heading 1", bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
-            space_before=12, space_after=12, outline_level=0,
+            "APA Heading 1",
+            bold=True,
+            align=WD_ALIGN_PARAGRAPH.CENTER,
+            space_before=12,
+            space_after=12,
+            outline_level=0,
         ),
         # Same look as Heading1 but deliberately carries NO outline level,
         # so it never shows up in the TOC (used for the cover title / the
         # "Índice" heading itself).
         "Heading1Plain": make_heading(
-            "APA Heading 1 Plain", bold=True, align=WD_ALIGN_PARAGRAPH.CENTER,
-            space_before=12, space_after=12,
+            "APA Heading 1 Plain",
+            bold=True,
+            align=WD_ALIGN_PARAGRAPH.CENTER,
+            space_before=12,
+            space_after=12,
         ),
         # Registers as TOC level 2.
         "Heading2": make_heading(
-            "APA Heading 2", bold=True, align=WD_ALIGN_PARAGRAPH.LEFT,
-            space_before=12, space_after=6, outline_level=1,
+            "APA Heading 2",
+            bold=True,
+            align=WD_ALIGN_PARAGRAPH.LEFT,
+            space_before=12,
+            space_after=6,
+            outline_level=1,
         ),
         "Heading3": make_heading(
-            "APA Heading 3", bold=True, italic=True,
-            align=WD_ALIGN_PARAGRAPH.LEFT, space_before=10, space_after=6,
+            "APA Heading 3",
+            bold=True,
+            italic=True,
+            align=WD_ALIGN_PARAGRAPH.LEFT,
+            space_before=10,
+            space_after=6,
         ),
         "Heading4": make_heading(
-            "APA Heading 4", bold=True, align=WD_ALIGN_PARAGRAPH.LEFT,
-            left_indent=36, space_before=8, space_after=4,
+            "APA Heading 4",
+            bold=True,
+            align=WD_ALIGN_PARAGRAPH.LEFT,
+            left_indent=36,
+            space_before=8,
+            space_after=4,
         ),
         "Heading5": make_heading(
-            "APA Heading 5", bold=True, italic=True,
-            align=WD_ALIGN_PARAGRAPH.LEFT, left_indent=36,
-            space_before=8, space_after=4,
+            "APA Heading 5",
+            bold=True,
+            italic=True,
+            align=WD_ALIGN_PARAGRAPH.LEFT,
+            left_indent=36,
+            space_before=8,
+            space_after=4,
         ),
         "Body": make(
-            "APA Body", align=WD_ALIGN_PARAGRAPH.JUSTIFY,
+            "APA Body",
+            align=WD_ALIGN_PARAGRAPH.JUSTIFY,
             first_line_indent=36,
         ),
         "BlockQuote": make(
-            "APA Block Quote", align=WD_ALIGN_PARAGRAPH.JUSTIFY,
-            left_indent=36, right_indent=36, space_before=6, space_after=6,
+            "APA Block Quote",
+            align=WD_ALIGN_PARAGRAPH.JUSTIFY,
+            left_indent=36,
+            right_indent=36,
+            space_before=6,
+            space_after=6,
         ),
         "Bullet": "List Bullet",
         "Numbered": "List Number",
         "Reference": make(
-            "APA Reference", align=WD_ALIGN_PARAGRAPH.LEFT,
-            left_indent=36, first_line_indent=-36, space_after=12,
+            "APA Reference",
+            align=WD_ALIGN_PARAGRAPH.LEFT,
+            left_indent=36,
+            first_line_indent=-36,
+            space_after=12,
         ),
         "Caption": make(
-            "APA Caption", italic=True, size=max(base_size - 2, 8),
-            align=WD_ALIGN_PARAGRAPH.CENTER, space_before=4, space_after=12,
+            "APA Caption",
+            italic=True,
+            size=max(base_size - 2, 8),
+            align=WD_ALIGN_PARAGRAPH.CENTER,
+            space_before=4,
+            space_after=12,
         ),
     }
 
@@ -398,16 +475,60 @@ def _set_outline_level(style, level: int) -> None:
 # --- table of contents / fields -----------------------------------------
 
 
-def _insert_toc_field(docx) -> None:
-    p = docx.add_paragraph()
-    _add_field(
-        p,
-        'TOC \\o "1-2" \\h \\z \\u',
-        cached_text=(
-            "Haga clic con el botón derecho y seleccione “Actualizar "
-            "campos” para generar el índice."
-        ),
-    )
+def _insert_toc_field(
+    docx,
+    entries: list[tuple[int, str, int]],
+    content_width_pt: float,
+) -> None:
+    """Insert an updateable TOC field with an already rendered result."""
+    if not entries:
+        paragraph = docx.add_paragraph()
+        _add_field(paragraph, 'TOC \\o "1-2" \\h \\z \\u')
+        return
+
+    paragraphs = []
+    for level, title, page_number in entries:
+        paragraph = docx.add_paragraph()
+        paragraph.paragraph_format.left_indent = Pt(18 * level)
+        paragraph.paragraph_format.tab_stops.add_tab_stop(
+            Pt(content_width_pt),
+            WD_TAB_ALIGNMENT.RIGHT,
+            WD_TAB_LEADER.DOTS,
+        )
+        paragraph.add_run(title)
+        paragraph.add_run("\t")
+        paragraph.add_run(str(page_number))
+        paragraphs.append(paragraph)
+
+    _start_complex_field(paragraphs[0], 'TOC \\o "1-2" \\h \\z \\u')
+    _end_complex_field(paragraphs[-1])
+
+
+def _start_complex_field(paragraph, instruction: str) -> None:
+    run = paragraph.add_run()
+    paragraph._p.remove(run._r)
+    paragraph._p.insert(0, run._r)
+
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    begin.set(qn("w:dirty"), "true")
+    run._r.append(begin)
+
+    field_instruction = OxmlElement("w:instrText")
+    field_instruction.set(qn("xml:space"), "preserve")
+    field_instruction.text = f" {instruction} "
+    run._r.append(field_instruction)
+
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+    run._r.append(separate)
+
+
+def _end_complex_field(paragraph) -> None:
+    run = paragraph.add_run()
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    run._r.append(end)
 
 
 def _add_field(paragraph, instruction: str, *, cached_text: str = "") -> None:
@@ -516,7 +637,7 @@ def _add_hyperlink(paragraph, text: str, url: str):
     return Run(new_run, paragraph)
 
 
-def _closest_highlight(hex_value) -> "WD_COLOR_INDEX":
+def _closest_highlight(hex_value) -> WD_COLOR_INDEX:
     target = _parse_color(hex_value, default=None)
     if target is None:
         return WD_COLOR_INDEX.YELLOW
@@ -546,7 +667,9 @@ def _render_block(container, node: DocumentNode, ctx: dict) -> None:
         return
 
     if node.type in _HEADING_STYLE_NAMES:
-        p = container.add_paragraph(style=styles[_HEADING_STYLE_NAMES[node.type]])
+        p = container.add_paragraph(
+            style=styles[_HEADING_STYLE_NAMES[node.type]]
+        )
         _render_inline(p, node.children)
         _apply_block_style(p, node.styles)
         return
@@ -585,7 +708,9 @@ def _render_block(container, node: DocumentNode, ctx: dict) -> None:
         _render_table(container, node, ctx)
         return
 
-    raise DocumentBuildError(f"Unsupported block node in section: '{node.type}'")
+    raise DocumentBuildError(
+        f"Unsupported block node in section: '{node.type}'"
+    )
 
 
 def _apply_block_style(paragraph, node_styles: dict) -> None:
@@ -643,7 +768,9 @@ def _shade_paragraph(paragraph, hex_color) -> None:
     pPr.append(shd)
 
 
-def _set_paragraph_left_border(paragraph, width_pt: float, hex_color: str) -> None:
+def _set_paragraph_left_border(
+    paragraph, width_pt: float, hex_color: str
+) -> None:
     pPr = paragraph._p.get_or_add_pPr()
     borders = OxmlElement("w:pBdr")
     left = OxmlElement("w:left")
@@ -756,8 +883,14 @@ def _resolve_page_size(doc_styles: dict) -> tuple[float, float]:
     raw = doc_styles.get("pageSize", "letter")
     if isinstance(raw, dict):
         default_w, default_h = _PAGE_SIZES_IN["letter"]
-        width = (_parse_length_pt(raw.get("width"), default=default_w * 72) or default_w * 72) / 72
-        height = (_parse_length_pt(raw.get("height"), default=default_h * 72) or default_h * 72) / 72
+        width = (
+            _parse_length_pt(raw.get("width"), default=default_w * 72)
+            or default_w * 72
+        ) / 72
+        height = (
+            _parse_length_pt(raw.get("height"), default=default_h * 72)
+            or default_h * 72
+        ) / 72
         return width, height
     return _PAGE_SIZES_IN.get(str(raw).lower(), _PAGE_SIZES_IN["letter"])
 
@@ -780,7 +913,9 @@ def _resolve_font_family(name: str | None) -> str:
     return name.split(",")[0].strip().strip('"')
 
 
-def _resolve_dimension(value, content_width_pt: float, *, default: float) -> float:
+def _resolve_dimension(
+    value, content_width_pt: float, *, default: float
+) -> float:
     if value is None:
         return default
     text = str(value).strip()
