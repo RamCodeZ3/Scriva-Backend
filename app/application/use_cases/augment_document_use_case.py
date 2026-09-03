@@ -3,6 +3,7 @@ from __future__ import annotations
 from domain.entities.document import DocumentStatus
 from domain.entities.source import Source
 from domain.exceptions import DocumentBuildError
+from domain.value_objects.apa_structure import APASectionType
 
 from application.dtos.document_dtos import (
     AugmentDocumentInput,
@@ -80,9 +81,19 @@ class AugmentDocumentUseCase:
             existing_references=document.sources,
             new_content=new_content,
             document_type=document.document_type,
-            presentation=document.presentation,
             additional_notes=data.additional_notes,
         )
+
+        # The cover is editable document content. Augmentation may update the
+        # other sections, but it must never regenerate the user's cover from
+        # metadata captured during initial creation.
+        original_cover = document.get_section(APASectionType.PRESENTATION)
+        if original_cover is not None:
+            sections = [original_cover] + [
+                section
+                for section in sections
+                if section.section_type is not APASectionType.PRESENTATION
+            ]
 
         document.augment(
             title=title,

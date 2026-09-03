@@ -248,7 +248,10 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     "contents itself after merging your sections, from whatever "
     "'heading-1'/'heading-2' nodes end up in the final document — it is "
     "never something you write.\n"
-    "11. Update 'sources' and 'conclusion' if the new content changes "
+    '11. NEVER return a section with "section_type": "presentation". '
+    "The cover is user-editable content owned by the application and is "
+    "not included in this request.\n"
+    "12. Update 'sources' and 'conclusion' if the new content changes "
     "what they should say; otherwise mark them unchanged. If you DO "
     "regenerate 'conclusion', its LAST node must still be a "
     '{"type": "page-break"} node, exactly as before. '
@@ -258,16 +261,8 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     "specific, content-descriptive heading in your own words — never the "
     'generic word "Introducción"/"Introduction" and never a translation '
     "of the machine-only 'section_type' identifier. The introduction "
-    "title remains visible and must not be omitted. 'presentation' must "
-    "always be present too — mark it "
-    "unchanged if the structured presentation data hasn't changed; if it "
-    "has, regen it following the same rule as before: only the "
-    "structured fields (student name, institution, subject, professor, "
-    "student ID, date), one per paragraph node with NO label/prefix "
-    '(e.g. "Aram Musset", never "Nombre: Aram Musset"), never a summary '
-    "of the document's topic, and its LAST node must still be a "
-    '{"type": "page-break"} node.\n'
-    "12. Preserve any existing 'styles' or 'marks' you see on nodes you "
+    "title remains visible and must not be omitted.\n"
+    "13. Preserve any existing 'styles' or 'marks' you see on nodes you "
     "keep or lightly edit — don't strip formatting the user (or a previous "
     "request) explicitly asked for. Only add new 'styles'/'marks' if the "
     "current additional notes explicitly request them, and never invent "
@@ -318,7 +313,6 @@ _AUGMENT_RESPONSE_SHAPE_HINT = """
 {
   "title": "usually the same title as before, unless it must change",
   "sections": [
-    {"section_type": "presentation", "unchanged": true},
     {"section_type": "introduction", "unchanged": true},
     {"section_type": "body", "title": "...", "nodes": [ BLOCK, ... ]},
     {"section_type": "conclusion", "title": "...", "nodes": [ BLOCK, ... ]},
@@ -367,7 +361,6 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
         existing_references: list[SourceReference],
         new_content: str,
         document_type: DocumentType,
-        presentation: PresentationInfo,
         additional_notes: str | None = None,
     ) -> tuple[str, list[APASection], list[SourceReference]]:
         prompt = self._build_augment_prompt(
@@ -375,7 +368,6 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             existing_references=existing_references,
             new_content=new_content,
             document_type=document_type,
-            presentation=presentation,
             additional_notes=additional_notes,
         )
         raw_text = await self._generate(
@@ -476,7 +468,6 @@ Respond with a single JSON object shaped exactly like this:
         existing_references: list[SourceReference],
         new_content: str,
         document_type: DocumentType,
-        presentation: PresentationInfo,
         additional_notes: str | None,
     ) -> str:
         notes = _clean_notes(additional_notes)
@@ -488,6 +479,8 @@ Respond with a single JSON object shaped exactly like this:
                     "nodes": [n.to_dict() for n in s.body_nodes],
                 }
                 for s in existing_sections
+                if s.section_type is not APASectionType.PRESENTATION
+                and s.section_type is not APASectionType.INDEX
             ],
             ensure_ascii=False,
         )
@@ -511,10 +504,6 @@ Existing sections (JSON, one entry per section_type): {existing_sections_json}
 
 Existing references (JSON): {existing_refs_json}
 
-Presentation/cover page data — the 'presentation' section's nodes must
-restate exactly these fields, one per paragraph, and nothing else:
-{presentation}
-
 User's additional notes for this update: {notes}
 
 New source material to incorporate:
@@ -525,8 +514,9 @@ New source material to incorporate:
 Respond with a single JSON object shaped exactly like this:
 {_AUGMENT_RESPONSE_SHAPE_HINT}
 
-Every section_type must appear exactly once, either as "unchanged": true
-or with full "title"/"nodes". "references" must be the complete,
+Every section_type shown in the existing sections must appear exactly once,
+either as "unchanged": true or with full "title"/"nodes". Do not return
+"presentation" or "index". "references" must be the complete,
 de-duplicated list (old entries plus any genuinely new ones).
 """.strip()
 

@@ -219,7 +219,15 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
 
         elements: list = [
             Spacer(1, 2.5 * inch),
-            Paragraph(_xml_escape(document.title), styles["TitleCover"]),
+            Paragraph(
+                _render_inline(section.heading.children)
+                if section is not None
+                else _xml_escape(document.title),
+                _apply_block_style(
+                    styles["TitleCover"],
+                    section.heading.styles if section is not None else {},
+                ),
+            ),
             Spacer(1, 0.5 * inch),
         ]
         if section is None:
@@ -230,7 +238,10 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
                 elements += _render_block(node, styles, content_width)
                 continue
             elements.append(
-                Paragraph(_xml_escape(node.plain_text()), styles["CoverLine"])
+                Paragraph(
+                    _render_inline(node.children),
+                    _apply_block_style(styles["CoverLine"], node.styles),
+                )
             )
         return elements
 

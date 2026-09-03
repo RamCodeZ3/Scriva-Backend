@@ -74,6 +74,52 @@ class ExportTableOfContentsTest(unittest.TestCase):
         self.assertIn("Introducción", visible_text)
         self.assertIn("Tema principal", visible_text)
 
+    def test_docx_renders_cover_from_presentation_nodes(self) -> None:
+        cover = self.document.get_section(APASectionType.PRESENTATION)
+        assert cover is not None
+        self.document.title = "Stale metadata title"
+        self.document.sections = [
+            (
+                APASection(
+                    section_type=cover.section_type,
+                    heading=DocumentNode(
+                        type=HEADING_1,
+                        children=(
+                            text_node(
+                                "Edited node title",
+                                marks=(Mark(MARK_COLOR, "#FF0000"),),
+                            ),
+                        ),
+                        styles={"textAlign": "right"},
+                    ),
+                    body_nodes=(
+                        DocumentNode(
+                            type=PARAGRAPH,
+                            children=(text_node("Edited cover line"),),
+                            styles={"textAlign": "left"},
+                        ),
+                        page_break_node(),
+                    ),
+                )
+                if section.section_type is APASectionType.PRESENTATION
+                else section
+            )
+            for section in self.document.sections
+        ]
+
+        content = DocxDocumentExporterAdapter()._build_sync(self.document)
+        rendered = ReadDocx(BytesIO(content))
+
+        self.assertEqual(rendered.paragraphs[0].text, "Edited node title")
+        self.assertEqual(rendered.paragraphs[1].text, "Edited cover line")
+        self.assertNotIn(
+            "Stale metadata title",
+            "\n".join(paragraph.text for paragraph in rendered.paragraphs),
+        )
+        self.assertEqual(
+            str(rendered.paragraphs[0].runs[0].font.color.rgb), "FF0000"
+        )
+
     def test_rebuilds_toc_when_an_editor_flattens_it(self) -> None:
         self.document.sections = [
             (

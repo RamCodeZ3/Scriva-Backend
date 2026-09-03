@@ -123,23 +123,22 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
         return buffer.getvalue()
 
     def _build_cover_page(self, docx, document: Document, ctx: dict) -> None:
+        section = document.get_section(APASectionType.PRESENTATION)
         title_p = docx.add_paragraph(style=ctx["styles"]["TitleCover"])
         _mark_section(title_p._p, APASectionType.PRESENTATION)
-        title_p.add_run(document.title)
-
-        section = document.get_section(APASectionType.PRESENTATION)
         if section is None:
+            title_p.add_run(document.title)
             return
+        _render_inline(title_p, section.heading.children)
+        _apply_block_style(title_p, section.heading.styles)
 
         for node in section.body_nodes:
             if node.type == PAGE_BREAK:
                 # Normalized once by _build_sync after the complete cover.
                 continue
             line = docx.add_paragraph(style=ctx["styles"]["CoverLine"])
-            # Parity with the PDF adapter: cover lines render plain text,
-            # not inline marks (this section is author/professor/date/
-            # institution lines, not rich prose).
-            line.add_run(node.plain_text())
+            _render_inline(line, node.children)
+            _apply_block_style(line, node.styles)
 
     def _build_toc_page(
         self,
