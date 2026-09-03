@@ -122,11 +122,15 @@ class DocxDocumentParserAdapter(DocumentParserPort):
                 if _contains_field_end(paragraph):
                     inside_toc = False
                 continue
-            if not text and _page_break_count(paragraph):
+            leading_page_breaks = _page_break_before_count(paragraph)
+            inline_page_breaks = _inline_page_break_count(paragraph)
+            if not text and (leading_page_breaks or inline_page_breaks):
                 if heading is not None:
                     body.extend(
                         DocumentNode(type=PAGE_BREAK)
-                        for _ in range(_page_break_count(paragraph))
+                        for _ in range(
+                            leading_page_breaks + inline_page_breaks
+                        )
                     )
                 continue
             if not text:
@@ -136,10 +140,19 @@ class DocxDocumentParserAdapter(DocumentParserPort):
             style = paragraph.style.name if paragraph.style else ""
             detected = _section_type(text, style, current_type)
             if detected is not None:
+                if heading is not None:
+                    body.extend(
+                        DocumentNode(type=PAGE_BREAK)
+                        for _ in range(leading_page_breaks)
+                    )
                 flush()
                 current_type = detected
                 heading = _heading_node(paragraph, detected)
                 body = []
+                body.extend(
+                    DocumentNode(type=PAGE_BREAK)
+                    for _ in range(inline_page_breaks)
+                )
                 continue
             if heading is None:
                 # Content before the first semantic heading is the cover.
@@ -150,7 +163,15 @@ class DocxDocumentParserAdapter(DocumentParserPort):
                     section_type=current_type.value,
                 )
             node = _paragraph_node(paragraph, style)
+            body.extend(
+                DocumentNode(type=PAGE_BREAK)
+                for _ in range(leading_page_breaks)
+            )
             body.append(_imported_node(node, current_type))
+            body.extend(
+                DocumentNode(type=PAGE_BREAK)
+                for _ in range(inline_page_breaks)
+            )
 
         flush()
         if not sections:
@@ -395,8 +416,12 @@ def _contains_field_end(paragraph) -> bool:
     return bool(values)
 
 
-def _page_break_count(paragraph) -> int:
+def _inline_page_break_count(paragraph) -> int:
     return len(paragraph._p.xpath('.//w:br[@w:type="page"]'))
+
+
+def _page_break_before_count(paragraph) -> int:
+    return int(bool(paragraph._p.xpath("./w:pPr/w:pageBreakBefore")))
 
 
 def _paragraph_styles(paragraph) -> dict[str, str | float]:

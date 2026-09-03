@@ -5,6 +5,7 @@ from dataclasses import replace
 from domain.value_objects.apa_structure import APASection, APASectionType
 from domain.value_objects.document_node import (
     LIST_TYPES,
+    PAGE_BREAK,
     TABLE_OF_CONTENTS,
     DocumentNode,
     Mark,
@@ -54,6 +55,7 @@ def merge_docx_edits(
             list_spans,
             offset,
         )
+        body_nodes = _merge_page_breaks(body_nodes, incoming.body_nodes)
         merged.append(
             APASection(
                 section_type=current.section_type,
@@ -62,6 +64,41 @@ def merge_docx_edits(
             )
         )
     return merged
+
+
+def _merge_page_breaks(
+    canonical: tuple[DocumentNode, ...],
+    incoming: tuple[DocumentNode, ...],
+) -> tuple[DocumentNode, ...]:
+    """Apply the edited DOCX's top-level page-break positions and counts.
+
+    Page breaks contain no text, so the text-based topology merge cannot
+    detect additions or removals. DOCX parsers represent them as top-level
+    nodes between paragraphs, which lets us restore them by character offset
+    without sacrificing canonical list/table structure.
+    """
+    breaks_by_offset: dict[int, list[DocumentNode]] = {}
+    offset = 0
+    for node in incoming:
+        if node.type == PAGE_BREAK:
+            breaks_by_offset.setdefault(offset, []).append(node)
+        else:
+            offset += len(node.plain_text())
+
+    result: list[DocumentNode] = []
+    offset = 0
+    result.extend(breaks_by_offset.pop(offset, ()))
+    for node in canonical:
+        if node.type == PAGE_BREAK:
+            continue
+        result.append(node)
+        offset += len(node.plain_text())
+        result.extend(breaks_by_offset.pop(offset, ()))
+
+    # A malformed/unusual editor structure should not silently lose breaks.
+    for remaining in breaks_by_offset.values():
+        result.extend(remaining)
+    return tuple(result)
 
 
 def _merge_index(current: APASection, incoming: APASection) -> APASection:

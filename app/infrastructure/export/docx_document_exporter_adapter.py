@@ -103,10 +103,6 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
         ctx = {"styles": styles, "content_width_pt": content_width_pt}
 
         self._build_cover_page(docx, document, ctx)
-        # The page transition is owned by the exporter. Older generated
-        # documents may also contain one or more page-break nodes in the
-        # presentation section; rendering those as well creates a blank page.
-        docx.add_page_break()
         self._build_toc_page(docx, document, ctx, toc_entries)
 
         for section_type in (
@@ -132,13 +128,20 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
         _render_inline(title_p, section.heading.children)
         _apply_block_style(title_p, section.heading.styles)
 
+        page_breaks = 0
         for node in section.body_nodes:
             if node.type == PAGE_BREAK:
-                # Normalized once by _build_sync after the complete cover.
-                continue
-            line = docx.add_paragraph(style=ctx["styles"]["CoverLine"])
-            _render_inline(line, node.children)
-            _apply_block_style(line, node.styles)
+                _render_block(docx, node, ctx)
+                page_breaks += 1
+            else:
+                line = docx.add_paragraph(style=ctx["styles"]["CoverLine"])
+                _render_inline(line, node.children)
+                _apply_block_style(line, node.styles)
+
+        # Defensive fallback for legacy/incomplete documents. Normally the
+        # canonical transition is already a node at the end of the cover.
+        if page_breaks == 0:
+            docx.add_page_break()
 
     def _build_toc_page(
         self,

@@ -9,6 +9,8 @@ from uuid import uuid4
 from zipfile import ZipFile
 
 from docx import Document as ReadDocx
+from docx.enum.text import WD_BREAK
+from docx.oxml import OxmlElement
 from domain.entities.document import Document, DocumentStatus
 from domain.services.table_of_contents_builder import build_index_section
 from domain.value_objects.apa_structure import APASection, APASectionType
@@ -120,6 +122,27 @@ class ExportTableOfContentsTest(unittest.TestCase):
             str(rendered.paragraphs[0].runs[0].font.color.rgb), "FF0000"
         )
 
+    def test_docx_renders_multiple_cover_page_break_nodes(self) -> None:
+        cover = self.document.get_section(APASectionType.PRESENTATION)
+        assert cover is not None
+        self.document.sections = [
+            (
+                replace(
+                    cover,
+                    body_nodes=cover.body_nodes + (page_break_node(),),
+                )
+                if section.section_type is APASectionType.PRESENTATION
+                else section
+            )
+            for section in self.document.sections
+        ]
+
+        content = DocxDocumentExporterAdapter()._build_sync(self.document)
+
+        with ZipFile(BytesIO(content)) as archive:
+            document_xml = archive.read("word/document.xml").decode("utf-8")
+        self.assertEqual(document_xml.count('w:br w:type="page"'), 4)
+
     def test_rebuilds_toc_when_an_editor_flattens_it(self) -> None:
         self.document.sections = [
             (
@@ -202,6 +225,25 @@ class ExportTableOfContentsTest(unittest.TestCase):
         )
         self.assertEqual(
             parsed_introduction.title, "Edited introduction title"
+        )
+
+    def test_parser_detects_page_breaks_on_nonempty_paragraph(self) -> None:
+        content = DocxDocumentExporterAdapter()._build_sync(self.document)
+        edited = ReadDocx(BytesIO(content))
+        cover_line = edited.paragraphs[1]
+        cover_line._p.get_or_add_pPr().append(OxmlElement("w:pageBreakBefore"))
+        cover_line.add_run().add_break(WD_BREAK.PAGE)
+        buffer = BytesIO()
+        edited.save(buffer)
+
+        sections = asyncio.run(
+            DocxDocumentParserAdapter().parse(buffer.getvalue())
+        )
+
+        presentation = _parsed_section(sections, APASectionType.PRESENTATION)
+        self.assertEqual(
+            sum(node.type == PAGE_BREAK for node in presentation.body_nodes),
+            3,
         )
 
     def test_parser_preserves_heading_one_and_table_layout(self) -> None:
