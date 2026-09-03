@@ -1,3 +1,5 @@
+from domain.value_objects.apa_structure import APASectionType
+
 from application.dtos.document_dtos import (
     DocumentOutput,
     UpdateDocumentInput,
@@ -12,6 +14,7 @@ from application.ports.document_parser_port import DocumentParserPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.docx_cache_port import DocxCachePort
 from application.services.document_docx_cache import cache_docx
+from application.services.document_edit_merge import merge_docx_edits
 
 
 class UpdateDocumentUseCase:
@@ -40,24 +43,39 @@ class UpdateDocumentUseCase:
             )
 
         sections = data.sections
+        title = data.title
         if data.docx_bytes is not None:
-            sections = await self._parser.parse(data.docx_bytes)
+            parsed_sections = await self._parser.parse(data.docx_bytes)
+            sections = merge_docx_edits(document.sections, parsed_sections)
+            presentation = next(
+                (
+                    section
+                    for section in parsed_sections
+                    if section.section_type is APASectionType.PRESENTATION
+                ),
+                None,
+            )
+            if presentation is not None and (
+                title is None or title == document.title
+            ):
+                title = presentation.title
 
         document.update_content(
-            title=data.title,
+            title=title,
             sections=sections,
             presentation=data.presentation,
         )
         await self._documents.save(document)
 
-        docx_bytes = data.docx_bytes
-        if docx_bytes is None:
-            exported = await self._exporter.export(document)
-            if exported.file_bytes is None:
-                raise RuntimeError(
-                    "The DOCX exporter returned no binary content."
-                )
-            docx_bytes = exported.file_bytes
+        # Always compile the persisted model. Browser-based DOCX editors can
+        # silently flatten complex OOXML fields (notably the TOC), page-break
+        # paragraphs, and paragraph styles even when the user made no change.
+        # Parsing first and exporting here restores Scriva's canonical
+        # structure while retaining the supported user edits.
+        exported = await self._exporter.export(document)
+        if exported.file_bytes is None:
+            raise RuntimeError("The DOCX exporter returned no binary content.")
+        docx_bytes = exported.file_bytes
         await cache_docx(
             self._cache,
             document,

@@ -17,6 +17,7 @@ from domain.value_objects.apa_structure import (
 from domain.value_objects.document_node import (
     BLOCK_QUOTE,
     BULLETED_LIST,
+    HEADING_1,
     HEADING_2,
     HEADING_3,
     HEADING_4,
@@ -601,6 +602,7 @@ def _render_leaf(node: DocumentNode) -> str:
 # --- block rendering ----------------------------------------------------
 
 _HEADING_STYLE_NAMES = {
+    HEADING_1: "Heading1",
     HEADING_2: "Heading2",
     HEADING_3: "Heading3",
     HEADING_4: "Heading4",

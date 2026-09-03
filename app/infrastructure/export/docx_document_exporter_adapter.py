@@ -30,6 +30,7 @@ from domain.value_objects.apa_structure import (
 from domain.value_objects.document_node import (
     BLOCK_QUOTE,
     BULLETED_LIST,
+    HEADING_1,
     HEADING_2,
     HEADING_3,
     HEADING_4,
@@ -55,6 +56,7 @@ _ALIGN_MAP = {
     "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
 }
 _HEADING_STYLE_NAMES = {
+    HEADING_1: "Heading1",
     HEADING_2: "Heading2",
     HEADING_3: "Heading3",
     HEADING_4: "Heading4",
@@ -101,6 +103,9 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
         ctx = {"styles": styles, "content_width_pt": content_width_pt}
 
         self._build_cover_page(docx, document, ctx)
+        # The page transition is owned by the exporter. Older generated
+        # documents may also contain one or more page-break nodes in the
+        # presentation section; rendering those as well creates a blank page.
         docx.add_page_break()
         self._build_toc_page(docx, document, ctx, toc_entries)
 
@@ -128,7 +133,7 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
 
         for node in section.body_nodes:
             if node.type == PAGE_BREAK:
-                docx.add_page_break()
+                # Normalized once by _build_sync after the complete cover.
                 continue
             line = docx.add_paragraph(style=ctx["styles"]["CoverLine"])
             # Parity with the PDF adapter: cover lines render plain text,
@@ -151,22 +156,31 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
         # "Heading1Plain" vs "Heading1".
         heading = docx.add_paragraph(style=ctx["styles"]["Heading1Plain"])
         _mark_section(heading._p, APASectionType.INDEX)
-        heading.add_run(index_title)
-
         if index_section is None:
-            # Defensive fallback for a document somehow missing its index
-            # section entirely (should not happen) — still emit a working
-            # TOC field.
-            _insert_toc_field(docx, toc_entries, ctx["content_width_pt"])
-            return
-
-        for node in index_section.body_nodes:
-            if node.type == TABLE_OF_CONTENTS:
-                _insert_toc_field(docx, toc_entries, ctx["content_width_pt"])
-            elif node.type == PAGE_BREAK:
-                docx.add_page_break()
-            else:
-                _render_block(docx, node, ctx)
+            heading.add_run(index_title)
+        else:
+            _render_inline(heading, index_section.heading.children)
+            _apply_block_style(heading, index_section.heading.styles)
+        # The index is generated structure, not editable body content. Some
+        # browser DOCX editors flatten a complex TOC field into plain
+        # paragraphs on save. Always rebuilding it prevents those paragraphs
+        # from replacing the updateable Word field.
+        toc_styles = {}
+        if index_section is not None:
+            toc_node = next(
+                (
+                    node
+                    for node in index_section.body_nodes
+                    if node.type == TABLE_OF_CONTENTS
+                ),
+                None,
+            )
+            if toc_node is not None:
+                toc_styles = toc_node.styles
+        _insert_toc_field(
+            docx, toc_entries, ctx["content_width_pt"], toc_styles
+        )
+        docx.add_page_break()
 
     def _build_section(
         self,
@@ -182,7 +196,8 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
         if section_type is not APASectionType.BODY:
             heading = docx.add_paragraph(style=ctx["styles"]["Heading1"])
             _mark_section(heading._p, section_type)
-            heading.add_run(section.title)
+            _render_inline(heading, section.heading.children)
+            _apply_block_style(heading, section.heading.styles)
         for index, node in enumerate(section.body_nodes):
             _render_block(docx, node, ctx)
             if section_type is APASectionType.BODY and index == 0:
@@ -193,11 +208,36 @@ class DocxDocumentExporterAdapter(DocumentExporterPort):
                     _mark_section(body_elements[-2], section_type)
 
     def _build_references(self, docx, document: Document, ctx: dict) -> None:
+        conclusion = document.get_section(APASectionType.CONCLUSION)
+        if conclusion is None or conclusion.body_nodes[-1].type != PAGE_BREAK:
+            docx.add_page_break()
         sources_section = document.get_section(APASectionType.SOURCES)
         title = sources_section.title if sources_section else "References"
         heading = docx.add_paragraph(style=ctx["styles"]["Heading1"])
         _mark_section(heading._p, APASectionType.SOURCES)
-        heading.add_run(title)
+        if sources_section is None:
+            heading.add_run(title)
+        else:
+            _render_inline(heading, sources_section.heading.children)
+            _apply_block_style(heading, sources_section.heading.styles)
+
+        imported_references = sources_section is not None and any(
+            node.metadata.get("docxImported")
+            for node in sources_section.body_nodes
+        )
+        if sources_section is not None and imported_references:
+            for node in sources_section.body_nodes:
+                if node.type == PAGE_BREAK:
+                    continue
+                if node.type == PARAGRAPH:
+                    paragraph = docx.add_paragraph(
+                        style=ctx["styles"]["Reference"]
+                    )
+                    _render_inline(paragraph, node.children)
+                    _apply_block_style(paragraph, node.styles)
+                else:
+                    _render_block(docx, node, ctx)
+            return
 
         for ref in sorted(
             document.sources, key=lambda r: (r.author or "").lower()
@@ -479,10 +519,12 @@ def _insert_toc_field(
     docx,
     entries: list[tuple[int, str, int]],
     content_width_pt: float,
+    styles: dict | None = None,
 ) -> None:
     """Insert an updateable TOC field with an already rendered result."""
     if not entries:
         paragraph = docx.add_paragraph()
+        _apply_block_style(paragraph, styles or {})
         _add_field(paragraph, 'TOC \\o "1-2" \\h \\z \\u')
         return
 
@@ -495,6 +537,7 @@ def _insert_toc_field(
             WD_TAB_ALIGNMENT.RIGHT,
             WD_TAB_LEADER.DOTS,
         )
+        _apply_block_style(paragraph, styles or {})
         paragraph.add_run(title)
         paragraph.add_run("\t")
         paragraph.add_run(str(page_number))
@@ -822,14 +865,43 @@ def _render_table(container, node: DocumentNode, ctx: dict) -> None:
 
     n_cols = len(rows[0].children)
     content_width_pt = ctx["content_width_pt"]
-    col_width_pt = content_width_pt / n_cols if n_cols else content_width_pt
+    requested_widths = node.styles.get("columnWidths", ())
+    if (
+        isinstance(requested_widths, (list, tuple))
+        and len(requested_widths) == n_cols
+    ):
+        column_widths = [
+            _resolve_dimension(value, content_width_pt, default=None)
+            for value in requested_widths
+        ]
+        if any(width is None for width in column_widths):
+            column_widths = []
+    else:
+        column_widths = []
+    if not column_widths:
+        table_width = _resolve_dimension(
+            node.styles.get("width"),
+            content_width_pt,
+            default=content_width_pt,
+        )
+        column_widths = [table_width / n_cols] * n_cols
 
     table = container.add_table(rows=len(rows), cols=n_cols)
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table_alignment = {
+        "left": WD_TABLE_ALIGNMENT.LEFT,
+        "center": WD_TABLE_ALIGNMENT.CENTER,
+        "right": WD_TABLE_ALIGNMENT.RIGHT,
+    }
+    table.alignment = table_alignment.get(
+        str(node.styles.get("alignment", "center")).lower(),
+        WD_TABLE_ALIGNMENT.CENTER,
+    )
     table.autofit = False
+    _set_table_width(table, sum(column_widths))
+    for index, width in enumerate(column_widths):
+        table.columns[index].width = Pt(width)
     _set_table_borders(table)
-
-    cell_ctx = {**ctx, "content_width_pt": col_width_pt}
+    table_background = node.styles.get("backgroundColor")
 
     for r, row in enumerate(rows):
         if len(row.children) != n_cols:
@@ -838,20 +910,52 @@ def _render_table(container, node: DocumentNode, ctx: dict) -> None:
                 f"'table-cell' children (expected {n_cols}, got "
                 f"{len(row.children)})."
             )
+        row_height = _parse_length_pt(row.styles.get("height"), default=None)
+        if row_height is not None:
+            table.rows[r].height = Pt(row_height)
         for c, cell_node in enumerate(row.children):  # TABLE_CELL nodes
             cell = table.cell(r, c)
-            cell.width = Pt(col_width_pt)
+            cell_width = _parse_length_pt(
+                cell_node.styles.get("width"), default=column_widths[c]
+            )
+            cell.width = Pt(cell_width or column_widths[c])
+            cell_ctx = {
+                **ctx,
+                "content_width_pt": cell_width or column_widths[c],
+            }
             # python-docx always gives a fresh cell one empty paragraph;
             # drop it once we're about to add real content so we don't
             # leave a blank line above every cell's text.
             cell.paragraphs[0].text = ""
             for child in cell_node.children:
+                paragraph_count = len(cell.paragraphs)
                 _render_block(cell, child, cell_ctx)
+                if (
+                    child.type == PARAGRAPH
+                    and "textIndent" not in child.styles
+                ):
+                    for paragraph in cell.paragraphs[paragraph_count:]:
+                        paragraph.paragraph_format.first_line_indent = Pt(0)
             if len(cell.paragraphs) > 1 and not cell.paragraphs[0].runs:
                 cell.paragraphs[0]._p.getparent().remove(cell.paragraphs[0]._p)
-            if r == 0 and len(rows) > 1:
+            cell_background = cell_node.styles.get(
+                "backgroundColor", table_background
+            )
+            if cell_background:
+                _shade_cell(cell, str(cell_background).lstrip("#"))
+            elif r == 0 and len(rows) > 1:
                 # First row is conventionally the header row.
                 _shade_cell(cell, "F5F5F5")
+
+
+def _set_table_width(table, width_pt: float) -> None:
+    tbl_pr = table._tbl.tblPr
+    tbl_w = tbl_pr.first_child_found_in("w:tblW")
+    if tbl_w is None:
+        tbl_w = OxmlElement("w:tblW")
+        tbl_pr.append(tbl_w)
+    tbl_w.set(qn("w:type"), "dxa")
+    tbl_w.set(qn("w:w"), str(round(width_pt * 20)))
 
 
 def _set_table_borders(table) -> None:

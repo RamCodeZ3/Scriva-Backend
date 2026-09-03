@@ -10,6 +10,12 @@ from application.use_cases.get_document_use_case import GetDocumentUseCase
 from application.use_cases.update_document_use_case import (
     UpdateDocumentUseCase,
 )
+from domain.value_objects.apa_structure import APASection, APASectionType
+from domain.value_objects.document_node import (
+    HEADING_1,
+    DocumentNode,
+    text_node,
+)
 from infrastructure.cache.local_docx_cache import LocalDocxCacheService
 
 from tests.test_export_table_of_contents import _document_fixture
@@ -89,6 +95,41 @@ class UpdateDocumentWriteThroughTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(self.repository.saves, 1)
 
+    async def test_uses_cover_title_edited_inside_uploaded_docx(self) -> None:
+        old_title = self.document.title
+        parsed_sections = [
+            (
+                APASection(
+                    section.section_type,
+                    DocumentNode(
+                        type=HEADING_1,
+                        children=(text_node("Edited cover title"),),
+                    ),
+                    section.body_nodes,
+                )
+                if section.section_type is APASectionType.PRESENTATION
+                else section
+            )
+            for section in self.document.sections
+        ]
+        use_case = UpdateDocumentUseCase(
+            self.repository,
+            parser=_StaticParser(parsed_sections),
+            exporter=self.exporter,
+            cache=self.cache,
+        )
+
+        await use_case.execute(
+            UpdateDocumentInput(
+                document_id=self.document.id,
+                user_id=self.document.user_id,
+                title=old_title,
+                docx_bytes=b"uploaded-docx",
+            )
+        )
+
+        self.assertEqual(self.document.title, "Edited cover title")
+
 
 class _DocumentRepository:
     def __init__(self, document) -> None:
@@ -119,6 +160,14 @@ class _CountingExporter:
                 "wordprocessingml.document"
             ),
         )
+
+
+class _StaticParser:
+    def __init__(self, sections) -> None:
+        self.sections = sections
+
+    async def parse(self, content: bytes):
+        return self.sections
 
 
 if __name__ == "__main__":
