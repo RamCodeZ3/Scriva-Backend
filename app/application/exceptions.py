@@ -10,6 +10,10 @@ class SourceNotFoundError(ApplicationError):
     pass
 
 
+class SourceAccessDeniedError(ApplicationError):
+    """Raised when a user requests sources owned by another account."""
+
+
 class UserNotFoundError(ApplicationError):
     pass
 
@@ -23,7 +27,7 @@ class UnsupportedSourceTypeError(ApplicationError):
 
 
 class DocumentAccessDeniedError(ApplicationError):
-    """Raised when a document is requested/modified by a user who doesn't own it."""
+    """Raised when a document is accessed by a user who does not own it."""
 
 
 class NoSourcesExtractedError(ApplicationError):

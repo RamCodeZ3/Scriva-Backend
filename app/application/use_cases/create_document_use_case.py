@@ -41,7 +41,9 @@ class CreateDocumentUseCase:
         if user is None:
             raise UserNotFoundError(f"User '{data.user_id}' does not exist.")
 
-        raw_sources = [Source.create_auto(raw) for raw in data.sources]
+        raw_sources = [
+            Source.create_auto(raw, data.user_id) for raw in data.sources
+        ]
         for source in raw_sources:
             await self._sources.save(source)
 
