@@ -60,7 +60,9 @@ class AugmentDocumentUseCase:
                 "it must be 'done'."
             )
 
-        new_sources = [Source.create_auto(raw) for raw in data.sources]
+        new_sources = [
+            Source.create_auto(raw, data.user_id) for raw in data.sources
+        ]
         extracted_sources = await self._extract_sources(new_sources)
 
         if not extracted_sources:

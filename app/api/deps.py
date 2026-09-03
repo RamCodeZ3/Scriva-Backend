@@ -28,8 +28,12 @@ from application.use_cases.export_document_use_case import (
     ExportDocumentUseCase,
 )
 from application.use_cases.get_document_use_case import GetDocumentUseCase
+from application.use_cases.get_user_source_use_case import GetUserSourceUseCase
 from application.use_cases.list_user_documents_use_case import (
     ListUserDocumentsUseCase,
+)
+from application.use_cases.list_user_sources_use_case import (
+    ListUserSourcesUseCase,
 )
 from application.use_cases.process_document_use_case import (
     ProcessDocumentUseCase,
@@ -203,9 +207,10 @@ def get_document_repository(
 
 
 async def get_current_user_id(
-    authorization: str = Header(..., alias="Authorization"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
     jwt_auth: SupabaseJWTAuth = Depends(get_jwt_auth),
 ) -> UUID:
+    authorization = authorization or ""
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(
@@ -371,3 +376,15 @@ def get_list_user_documents_use_case(
         document_repository=document_repository,
         user_repository=user_repository,
     )
+
+
+def get_list_user_sources_use_case(
+    source_repository: SourceRepositoryPort = Depends(get_source_repository),
+) -> ListUserSourcesUseCase:
+    return ListUserSourcesUseCase(source_repository)
+
+
+def get_get_user_source_use_case(
+    source_repository: SourceRepositoryPort = Depends(get_source_repository),
+) -> GetUserSourceUseCase:
+    return GetUserSourceUseCase(source_repository)

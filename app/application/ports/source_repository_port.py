@@ -14,3 +14,13 @@ class SourceRepositoryPort(ABC):
     @abstractmethod
     async def get_by_id(self, source_id: UUID) -> Source | None:
         raise NotImplementedError
+
+    @abstractmethod
+    async def list_by_user(self, user_id: UUID) -> list[Source]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_by_id_for_user(
+        self, source_id: UUID, user_id: UUID
+    ) -> Source | None:
+        raise NotImplementedError
