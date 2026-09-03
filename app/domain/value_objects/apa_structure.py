@@ -47,7 +47,9 @@ APA7_DOCUMENT_STYLES: dict[str, Any] = {
 }
 
 
-def normalize_document_styles(document_styles: dict[str, Any] | None) -> dict[str, Any]:
+def normalize_document_styles(
+    document_styles: dict[str, Any] | None,
+) -> dict[str, Any]:
     """Merge user/document-level overrides on top of the APA 7 defaults,
     normalizing the foliation fields so the exporter never has to guard
     against a bad or unknown 'pageNumberPosition'."""

@@ -12,9 +12,7 @@ from domain.value_objects.document_node import HEADING_1 as _HEADING_1
 _DEFAULT_INDEX_TITLE = "Índice"
 
 
-def build_index_section(
-    *, title: str = _DEFAULT_INDEX_TITLE
-) -> APASection:
+def build_index_section(*, title: str = _DEFAULT_INDEX_TITLE) -> APASection:
     """Builds the (always identical in shape) 'index' APASection: a
     heading, a 'table-of-contents' placeholder, and a trailing
     'page-break' so 'introduction' always starts on a fresh page."""
