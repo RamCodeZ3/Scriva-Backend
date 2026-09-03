@@ -6,6 +6,30 @@ from io import BytesIO
 from urllib.request import urlopen
 from xml.sax.saxutils import escape as _xml_escape
 
+from application.dtos.export_result import ExportResult
+from application.ports.document_exporter_port import DocumentExporterPort
+from domain.entities.document import Document
+from domain.exceptions import DocumentBuildError
+from domain.value_objects.apa_structure import (
+    APASectionType,
+    normalize_document_styles,
+)
+from domain.value_objects.document_node import (
+    BLOCK_QUOTE,
+    BULLETED_LIST,
+    HEADING_1,
+    HEADING_2,
+    HEADING_3,
+    HEADING_4,
+    HEADING_5,
+    IMAGE,
+    NUMBERED_LIST,
+    PAGE_BREAK,
+    PARAGRAPH,
+    TABLE,
+    TABLE_OF_CONTENTS,
+    DocumentNode,
+)
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4, letter
@@ -24,32 +48,6 @@ from reportlab.platypus import (
     TableStyle,
 )
 from reportlab.platypus.tableofcontents import TableOfContents
-
-from domain.entities.document import Document
-from domain.exceptions import DocumentBuildError
-from domain.value_objects.apa_structure import (
-    APASectionType,
-    normalize_document_styles,
-)
-from domain.value_objects.document_node import (
-    BLOCK_QUOTE,
-    BULLETED_LIST,
-    HEADING_2,
-    HEADING_3,
-    HEADING_4,
-    HEADING_5,
-    IMAGE,
-    NUMBERED_LIST,
-    PAGE_BREAK,
-    PARAGRAPH,
-    TABLE,
-    TABLE_OF_CONTENTS,
-    DocumentNode,
-)
-
-from application.dtos.export_result import ExportResult
-from application.ports.document_exporter_port import DocumentExporterPort
-
 
 _PAGE_SIZES = {"letter": letter, "a4": A4}
 _ALIGN_MAP = {
@@ -126,6 +124,24 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         )
 
     def _build_sync(self, document: Document) -> bytes:
+        pdf_bytes, _ = self._build_with_toc_entries(document)
+        return pdf_bytes
+
+    def build_toc_entries(
+        self, document: Document
+    ) -> list[tuple[int, str, int]]:
+        """Lay out a document and return its resolved TOC entries.
+
+        ReportLab needs the same multi-pass build used by PDF export to know
+        the final page for every heading. DOCX export uses this method to
+        seed the Word TOC field with useful content on its first render.
+        """
+        _, entries = self._build_with_toc_entries(document)
+        return entries
+
+    def _build_with_toc_entries(
+        self, document: Document
+    ) -> tuple[bytes, list[tuple[int, str, int]]]:
         doc_styles = normalize_document_styles(document.document_styles)
         page_size = _resolve_page_size(doc_styles)
         margins = _resolve_margins(doc_styles)
@@ -180,12 +196,25 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         # multiBuild (not build): see _ApaDocTemplate docstring — this is
         # what lets the index show real, adapter-discovered page numbers.
         doc.multiBuild(story)
-        return buffer.getvalue()
+        toc = next(
+            (
+                flowable
+                for flowable in story
+                if isinstance(flowable, TableOfContents)
+            ),
+            None,
+        )
+        raw_entries = getattr(toc, "_lastEntries", ()) if toc else ()
+        entries = [
+            (int(level), str(text), int(page_number))
+            for level, text, page_number, _ in raw_entries
+        ]
+        return buffer.getvalue(), entries
 
     def _build_cover_page(
         self, document: Document, styles: dict, content_width: float
     ) -> list:
-        
+
         section = document.get_section(APASectionType.PRESENTATION)
 
         elements: list = [
@@ -241,7 +270,9 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
         # rendered elsewhere in the story (see _ApaDocTemplate.afterFlowable).
         toc = TableOfContents()
         toc.levelStyles = [styles["TOCLevel0"], styles["TOCLevel1"]]
-        toc.dotsMinLevel = 0  # dot leaders on every level, not just sub-entries
+        toc.dotsMinLevel = (
+            0  # dot leaders on every level, not just sub-entries
+        )
         return toc
 
     def _build_section(
@@ -257,7 +288,6 @@ class PdfDocumentExporterAdapter(DocumentExporterPort):
 
         elements: list = []
         if section_type is not APASectionType.BODY:
-            
             elements.append(
                 Paragraph(_xml_escape(section.title), styles["Heading1"])
             )
@@ -486,7 +516,9 @@ def _make_on_page(
     return _on_page
 
 
-def _draw_page_number(canvas, *, page_size, margins: dict[str, float], position: str) -> None:
+def _draw_page_number(
+    canvas, *, page_size, margins: dict[str, float], position: str
+) -> None:
     canvas.setFont("Times-Roman", 12)
     canvas.setFillColor(colors.black)
     page_num = str(canvas.getPageNumber())
@@ -570,6 +602,7 @@ def _render_leaf(node: DocumentNode) -> str:
 # --- block rendering ----------------------------------------------------
 
 _HEADING_STYLE_NAMES = {
+    HEADING_1: "Heading1",
     HEADING_2: "Heading2",
     HEADING_3: "Heading3",
     HEADING_4: "Heading4",
@@ -645,9 +678,7 @@ def _render_table(
         for cell in row.children:  # each is a TABLE_CELL node
             cell_flowables: list = []
             for child in cell.children:
-                cell_flowables += _render_block(
-                    child, styles, col_width
-                )
+                cell_flowables += _render_block(child, styles, col_width)
             row_cells.append(cell_flowables)
         data.append(row_cells)
 
@@ -885,7 +916,7 @@ def _parse_color(value, *, default):
         return default
 
 
-def _parse_border(value: str) -> tuple[float, "colors.Color | None"]:
+def _parse_border(value: str) -> tuple[float, colors.Color | None]:
     width_pt = 1.0
     color = None
     for part in str(value).split():

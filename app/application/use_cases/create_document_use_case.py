@@ -8,14 +8,15 @@ from application.dtos.document_dtos import (
     build_source_errors,
 )
 from application.exceptions import UserNotFoundError
-from application.ports.document_buffer_port import DocumentBufferPort
 from application.ports.document_exporter_port import DocumentExporterPort
 from application.ports.document_job_dispatcher_port import (
     DocumentJobDispatcherPort,
 )
 from application.ports.document_repository_port import DocumentRepositoryPort
+from application.ports.docx_cache_port import DocxCachePort
 from application.ports.source_repository_port import SourceRepositoryPort
 from application.ports.user_repository_port import UserRepositoryPort
+from application.services.document_docx_cache import cache_docx
 
 
 class CreateDocumentUseCase:
@@ -26,14 +27,14 @@ class CreateDocumentUseCase:
         user_repository: UserRepositoryPort,
         job_dispatcher: DocumentJobDispatcherPort,
         exporter: DocumentExporterPort,
-        buffer: DocumentBufferPort,
+        cache: DocxCachePort,
     ) -> None:
         self._documents = document_repository
         self._sources = source_repository
         self._users = user_repository
         self._dispatcher = job_dispatcher
         self._exporter = exporter
-        self._buffer = buffer
+        self._cache = cache
 
     async def execute(self, data: CreateDocumentInput) -> DocumentFileOutput:
         user = await self._users.get_by_id(data.user_id)
@@ -78,9 +79,14 @@ class CreateDocumentUseCase:
             updated_at=final_document.updated_at,
         )
         exported = await self._exporter.export(final_document)
-        await self._buffer.put(final_document.id, exported)
         if exported.file_bytes is None:
             raise RuntimeError("The DOCX exporter returned no binary content.")
+        await cache_docx(
+            self._cache,
+            final_document,
+            exported.file_bytes,
+            invalidate_existing=True,
+        )
         return DocumentFileOutput(
             document=metadata,
             file_bytes=exported.file_bytes,

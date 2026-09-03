@@ -4,13 +4,13 @@ import os
 from functools import lru_cache
 from uuid import UUID
 
-from application.ports.document_buffer_port import DocumentBufferPort
 from application.ports.document_exporter_resolver_port import (
     DocumentExporterResolverPort,
 )
 from application.ports.document_parser_port import DocumentParserPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
+from application.ports.docx_cache_port import DocxCachePort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
 from application.ports.google_credentials_port import GoogleCredentialsPort
 from application.ports.source_repository_port import SourceRepositoryPort
@@ -51,6 +51,7 @@ from infrastructure.auth.supabase_jwt_auth import (
     InvalidTokenError,
     SupabaseJWTAuth,
 )
+from infrastructure.cache.local_docx_cache import LocalDocxCacheService
 from infrastructure.export.document_exporter_resolver_adapter import (
     DocumentExporterResolverAdapter,
 )
@@ -78,9 +79,6 @@ from infrastructure.jobs.sync_job_dispatcher_adapter import (
 )
 from infrastructure.parsers.docx_document_parser_adapter import (
     DocxDocumentParserAdapter,
-)
-from infrastructure.persistence.in_memory_document_buffer import (
-    InMemoryDocumentBuffer,
 )
 from infrastructure.persistence.supabase_client import build_supabase_client
 from infrastructure.persistence.supabase_document_repository import (
@@ -167,8 +165,12 @@ def get_document_parser() -> DocumentParserPort:
 
 
 @lru_cache
-def get_document_buffer() -> DocumentBufferPort:
-    return InMemoryDocumentBuffer()
+def get_docx_cache() -> DocxCachePort:
+    cache_size_mb = int(os.environ.get("DOCX_CACHE_SIZE_MB", "1024"))
+    return LocalDocxCacheService(
+        directory=os.environ.get("DOCX_CACHE_DIR", "./storage/cache/docx"),
+        size_limit=cache_size_mb * 1024**2,
+    )
 
 
 @lru_cache
@@ -208,7 +210,10 @@ async def get_current_user_id(
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or malformed Authorization header. Expected: 'Bearer <token>'.",
+            detail=(
+                "Missing or malformed Authorization header. Expected: "
+                "'Bearer <token>'."
+            ),
         )
 
     try:
@@ -243,7 +248,9 @@ async def get_current_user(
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account is not registered in the documents service yet.",
+            detail=(
+                "This account is not registered in the documents service yet."
+            ),
         )
     return user
 
@@ -277,7 +284,7 @@ def get_create_document_use_case(
         get_process_document_use_case
     ),
     exporter=Depends(get_docx_document_exporter),
-    buffer: DocumentBufferPort = Depends(get_document_buffer),
+    cache: DocxCachePort = Depends(get_docx_cache),
 ) -> CreateDocumentUseCase:
     dispatcher = SyncJobDispatcherAdapter(process_use_case)
     return CreateDocumentUseCase(
@@ -286,7 +293,7 @@ def get_create_document_use_case(
         user_repository=user_repository,
         job_dispatcher=dispatcher,
         exporter=exporter,
-        buffer=buffer,
+        cache=cache,
     )
 
 
@@ -295,9 +302,9 @@ def get_get_document_use_case(
         get_document_repository
     ),
     exporter=Depends(get_docx_document_exporter),
-    buffer: DocumentBufferPort = Depends(get_document_buffer),
+    cache: DocxCachePort = Depends(get_docx_cache),
 ) -> GetDocumentUseCase:
-    return GetDocumentUseCase(document_repository, exporter, buffer)
+    return GetDocumentUseCase(document_repository, exporter, cache)
 
 
 def get_update_document_use_case(
@@ -305,18 +312,19 @@ def get_update_document_use_case(
         get_document_repository
     ),
     parser: DocumentParserPort = Depends(get_document_parser),
-    buffer: DocumentBufferPort = Depends(get_document_buffer),
+    exporter=Depends(get_docx_document_exporter),
+    cache: DocxCachePort = Depends(get_docx_cache),
 ) -> UpdateDocumentUseCase:
-    return UpdateDocumentUseCase(document_repository, parser, buffer)
+    return UpdateDocumentUseCase(document_repository, parser, exporter, cache)
 
 
 def get_delete_document_use_case(
     document_repository: DocumentRepositoryPort = Depends(
         get_document_repository
     ),
-    buffer: DocumentBufferPort = Depends(get_document_buffer),
+    cache: DocxCachePort = Depends(get_docx_cache),
 ) -> DeleteDocumentUseCase:
-    return DeleteDocumentUseCase(document_repository, buffer)
+    return DeleteDocumentUseCase(document_repository, cache)
 
 
 def get_augment_document_use_case(
@@ -327,7 +335,7 @@ def get_augment_document_use_case(
     extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
     document_writer: DocumentWriterPort = Depends(get_document_writer),
     exporter=Depends(get_docx_document_exporter),
-    buffer: DocumentBufferPort = Depends(get_document_buffer),
+    cache: DocxCachePort = Depends(get_docx_cache),
 ) -> AugmentDocumentUseCase:
     return AugmentDocumentUseCase(
         document_repository=document_repository,
@@ -335,7 +343,7 @@ def get_augment_document_use_case(
         extractor_factory=extractor_factory,
         document_writer=document_writer,
         exporter=exporter,
-        buffer=buffer,
+        cache=cache,
     )
 
 

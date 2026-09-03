@@ -4,10 +4,9 @@ import json
 import re
 from dataclasses import replace as _with_replaced
 
-from google import genai
-from google.genai import types
-
+from application.ports.document_writer_port import DocumentWriterPort
 from domain.exceptions import DocumentBuildError
+from domain.services.table_of_contents_builder import build_index_section
 from domain.value_objects.apa_structure import APASection, APASectionType
 from domain.value_objects.document_node import (
     BLOCK_QUOTE,
@@ -30,10 +29,8 @@ from domain.value_objects.document_node import (
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
-
-from application.ports.document_writer_port import DocumentWriterPort
-
-from domain.services.table_of_contents_builder import build_index_section
+from google import genai
+from google.genai import types
 
 # Full canonical APA 7 order (used for sorting the final section list —
 # 'index' is never requested from the AI, see _AI_SECTION_ORDER below).
@@ -63,6 +60,7 @@ def _ensure_trailing_page_break(section: APASection) -> APASection:
         body_nodes=section.body_nodes
         + (page_break_node(section_type=section.section_type.value),),
     )
+
 
 _NODE_SCHEMA_RULES = (
     "CRITICAL OUTPUT RULES — the renderer understands ONLY a small, "
@@ -123,10 +121,10 @@ _NODE_SCHEMA_RULES = (
     "renders EXACTLY the tree you return — it never invents page breaks "
     "of its own — so the ones APA 7 always requires must be present in "
     "your JSON:\n"
-    f'    - The \'presentation\' section\'s \'nodes\' MUST end with a '
+    f"    - The 'presentation' section's 'nodes' MUST end with a "
     f'{{"type": "{PAGE_BREAK}"}} node (the cover page always starts the '
     "table of contents on a fresh page).\n"
-    f'    - The \'conclusion\' section\'s \'nodes\' MUST end with a '
+    f"    - The 'conclusion' section's 'nodes' MUST end with a "
     f'{{"type": "{PAGE_BREAK}"}} node (the body always starts the '
     "references on a fresh page).\n"
     "    - Do NOT add a page-break node anywhere else — not between "
@@ -184,7 +182,7 @@ _SYSTEM_INSTRUCTION = (
     "the document is about, do NOT add a field that wasn't provided to "
     "you, and do NOT omit any field that was. Its LAST node must be a "
     '{"type": "page-break"} node — see the page-break rule above.\n'
-    "9. NEVER produce a section with \"section_type\": \"index\" — omit it "
+    '9. NEVER produce a section with "section_type": "index" — omit it '
     "completely from your JSON response. The application builds the "
     "table of contents itself, after you respond, from the real "
     "'heading-1' and 'heading-2' nodes you wrote in the other sections — "
@@ -197,7 +195,10 @@ _SYSTEM_INSTRUCTION = (
     'generic word "Introducción"/"Introduction" (nor a literal '
     "translation of it, nor any other section-label placeholder). A "
     "reader should learn something about THIS document's actual topic "
-    "just from that heading.\n"
+    "just from that heading. The literal 'section_type' value is a "
+    "machine identifier, not a suggested visible title: NEVER copy or "
+    "translate it into the 'title' field. This title IS rendered and "
+    "must remain present in the response.\n"
     "11. The 'body' section's \"title\" is used ONLY for internal "
     "bookkeeping and is NEVER rendered as a heading in the final "
     'document — do not write generic labels like "Desarrollo"/"Body"/'
@@ -241,8 +242,8 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     "9. If the new material complements or extends a topic already present "
     "in 'body', merge it into that existing paragraph/subtopic's node(s) "
     "instead of duplicating it as a separate block.\n"
-    "10. NEVER return a section with \"section_type\": \"index\" — not as "
-    "a full section, not even as {\"unchanged\": true}. Omit it entirely, "
+    '10. NEVER return a section with "section_type": "index" — not as '
+    'a full section, not even as {"unchanged": true}. Omit it entirely, '
     "in every response, always. The application rebuilds the table of "
     "contents itself after merging your sections, from whatever "
     "'heading-1'/'heading-2' nodes end up in the final document — it is "
@@ -253,9 +254,11 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
     '{"type": "page-break"} node, exactly as before. '
     "'introduction' is almost never affected by new material — mark it "
     "unchanged unless the new content truly changes the document's "
-    "overall scope. If you DO regenerate it, its \"title\" must remain a "
+    'overall scope. If you DO regenerate it, its "title" must remain a '
     "specific, content-descriptive heading in your own words — never the "
-    'generic word "Introducción"/"Introduction". \'presentation\' must '
+    'generic word "Introducción"/"Introduction" and never a translation '
+    "of the machine-only 'section_type' identifier. The introduction "
+    "title remains visible and must not be omitted. 'presentation' must "
     "always be present too — mark it "
     "unchanged if the structured presentation data hasn't changed; if it "
     "has, regen it following the same rule as before: only the "
@@ -274,14 +277,34 @@ _AUGMENT_SYSTEM_INSTRUCTION = (
 )
 
 _URL_PATTERN = re.compile(r"https?://", re.IGNORECASE)
+_GENERIC_INTRODUCTION_TITLES = frozenset(
+    {
+        "intro",
+        "introduction",
+        "introduccion",
+        "introducción",
+        "introducao",
+        "introdução",
+        "introduzione",
+        "einleitung",
+        "inleiding",
+        "wprowadzenie",
+        "введение",
+        "序論",
+        "はじめに",
+    }
+)
 
 _RESPONSE_SHAPE_HINT = """
 {
   "title": "A short, original academic title you write yourself",
   "sections": [
     {"section_type": "presentation", "title": "...", "nodes": [ BLOCK, ... ]},
-    {"section_type": "introduction", "title": "A specific, content-descriptive heading — never the generic word 'Introducción'", "nodes": [ BLOCK, ... ]},
-    {"section_type": "body", "title": "internal label only, never rendered", "nodes": [ {"type": "heading-2", ...}, BLOCK, ... ]},
+    {"section_type": "introduction",
+     "title": "El impacto de la automatización en el aprendizaje",
+     "nodes": [ BLOCK, ... ]},
+    {"section_type": "body", "title": "internal label only",
+     "nodes": [ {"type": "heading-2", ...}, BLOCK, ... ]},
     {"section_type": "conclusion", "title": "...", "nodes": [ BLOCK, ... ]},
     {"section_type": "sources", "title": "...", "nodes": [ BLOCK, ... ]}
   ],
@@ -389,9 +412,7 @@ class GeminiDocumentWriterAdapter(DocumentWriterPort):
             else s
             for s in without_index
         ]
-        index_section = _ensure_trailing_page_break(
-            build_index_section()
-        )
+        index_section = _ensure_trailing_page_break(build_index_section())
         finalized = without_index + [index_section]
         finalized.sort(key=lambda s: s.section_type.order)
         return finalized
@@ -437,7 +458,8 @@ honor via 'styles'/'marks'): {notes}
 Required sections, in this exact order: {section_names}.
 
 Presentation/cover page data — the 'presentation' section's nodes must
-restate exactly these fields, one per paragraph, and nothing else: {presentation}
+restate exactly these fields, one per paragraph, and nothing else:
+{presentation}
 
 Respond with a single JSON object shaped exactly like this:
 {_RESPONSE_SHAPE_HINT}
@@ -490,7 +512,8 @@ Existing sections (JSON, one entry per section_type): {existing_sections_json}
 Existing references (JSON): {existing_refs_json}
 
 Presentation/cover page data — the 'presentation' section's nodes must
-restate exactly these fields, one per paragraph, and nothing else: {presentation}
+restate exactly these fields, one per paragraph, and nothing else:
+{presentation}
 
 User's additional notes for this update: {notes}
 
@@ -517,7 +540,10 @@ de-duplicated list (old entries plus any genuinely new ones).
         if not raw_sections:
             raise DocumentBuildError("Gemini response has no 'sections'.")
 
-        sections = [self._build_section(s) for s in raw_sections]
+        sections = [
+            self._build_section(s, introduction_fallback=title)
+            for s in raw_sections
+        ]
         references = self._parse_references(data)
         return title, sections, references
 
@@ -545,21 +571,31 @@ de-duplicated list (old entries plus any genuinely new ones).
                 existing = existing_by_type.get(section_type)
                 if existing is None:
                     raise DocumentBuildError(
-                        f"Gemini marked '{section_type.value}' unchanged but no "
+                        "Gemini marked "
+                        f"'{section_type.value}' unchanged but no "
                         "prior version exists."
                     )
                 sections.append(existing)
                 continue
 
-            sections.append(self._build_section(s))
+            sections.append(
+                self._build_section(s, introduction_fallback=title)
+            )
 
         references = self._parse_references(data)
         return title, sections, references
 
-    def _build_section(self, raw: dict) -> APASection:
+    def _build_section(
+        self, raw: dict, *, introduction_fallback: str | None = None
+    ) -> APASection:
         try:
             section_type = APASectionType(raw["section_type"])
             title = self._validate_title(raw["title"], field="section title")
+            title = self._resolve_section_title(
+                section_type,
+                title,
+                introduction_fallback=introduction_fallback,
+            )
             raw_nodes = raw["nodes"]
         except (KeyError, ValueError) as exc:
             raise DocumentBuildError(
@@ -596,6 +632,29 @@ de-duplicated list (old entries plus any genuinely new ones).
             section_type=section_type, heading=heading, body_nodes=body_nodes
         )
 
+    def _resolve_section_title(
+        self,
+        section_type: APASectionType,
+        title: str,
+        *,
+        introduction_fallback: str | None,
+    ) -> str:
+        if section_type is not APASectionType.INTRODUCTION:
+            return title
+        if not _is_generic_introduction_title(title):
+            return title
+        if introduction_fallback is not None:
+            fallback = self._validate_title(
+                introduction_fallback,
+                field="introduction fallback title",
+            )
+            if not _is_generic_introduction_title(fallback):
+                return fallback
+        raise DocumentBuildError(
+            "Gemini returned a generic introduction title and no "
+            "content-specific fallback title is available."
+        )
+
     def _reject_image(self, node: DocumentNode) -> DocumentNode:
         if node.type == IMAGE:
             raise DocumentBuildError(
@@ -626,7 +685,8 @@ de-duplicated list (old entries plus any genuinely new ones).
         candidate = value.strip()
         if _URL_PATTERN.search(candidate):
             raise DocumentBuildError(
-                f"Gemini returned a {field} that looks like a URL: {candidate!r}"
+                f"Gemini returned a {field} that looks like a URL: "
+                f"{candidate!r}"
             )
         if len(candidate) > 200:
             raise DocumentBuildError(
@@ -642,6 +702,11 @@ def _clean_notes(additional_notes: str | None) -> str:
         if additional_notes and additional_notes.strip()
         else "None"
     )
+
+
+def _is_generic_introduction_title(title: str) -> bool:
+    normalized = re.sub(r"[^\w\s]", "", title.casefold()).strip()
+    return normalized in _GENERIC_INTRODUCTION_TITLES
 
 
 def _decode_json(raw_text: str) -> dict:

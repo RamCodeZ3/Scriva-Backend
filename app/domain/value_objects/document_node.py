@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import itertools
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
 from domain.exceptions import DocumentBuildError
 
@@ -18,29 +19,40 @@ NUMBERED_LIST = "numbered-list"
 LIST_ITEM = "list-item"
 IMAGE = "image"
 PAGE_BREAK = "page-break"
+SECTION_BREAK = "section-break"
 TABLE = "table"
 TABLE_ROW = "table-row"
 TABLE_CELL = "table-cell"
 TABLE_OF_CONTENTS = "table-of-contents"
+FIELD = "field"
+FOOTNOTE = "footnote"
+ENDNOTE = "endnote"
+HYPERLINK = "hyperlink"
+BOOKMARK = "bookmark"
+TAB = "tab"
 
 HEADING_TYPES = frozenset(
     {HEADING_1, HEADING_2, HEADING_3, HEADING_4, HEADING_5}
 )
 LIST_TYPES = frozenset({BULLETED_LIST, NUMBERED_LIST})
 TABLE_TYPES = frozenset({TABLE, TABLE_ROW, TABLE_CELL})
-# Every block type except "image", "table-of-contents" and "page-break" is
-# a normal container: it must have `children` and may carry `styles`.
-CONTAINER_BLOCK_TYPES = HEADING_TYPES | {
-    PARAGRAPH,
-    BLOCK_QUOTE,
-    BULLETED_LIST,
-    NUMBERED_LIST,
-    LIST_ITEM,
-} | TABLE_TYPES
-BLOCK_TYPES = CONTAINER_BLOCK_TYPES | {IMAGE, PAGE_BREAK, TABLE_OF_CONTENTS}
+NOTE_TYPES = frozenset({FOOTNOTE, ENDNOTE})
+ATOMIC_BLOCK_TYPES = frozenset(
+    {IMAGE, PAGE_BREAK, SECTION_BREAK, TABLE_OF_CONTENTS, FIELD, TAB}
+)
+CONTAINER_BLOCK_TYPES = (
+    HEADING_TYPES
+    | LIST_TYPES
+    | TABLE_TYPES
+    | NOTE_TYPES
+    | {PARAGRAPH, BLOCK_QUOTE, LIST_ITEM, HYPERLINK, BOOKMARK}
+)
+BLOCK_TYPES = CONTAINER_BLOCK_TYPES | ATOMIC_BLOCK_TYPES
+INLINE_BLOCK_TYPES = frozenset(
+    {FIELD, FOOTNOTE, ENDNOTE, HYPERLINK, BOOKMARK, TAB}
+)
+INLINE_ATOMIC_TYPES = frozenset({FIELD, TAB})
 
-# Valid positions for page-number foliation, normalized into
-# `document_styles.pageNumberPosition` (see apa_structure.py).
 PAGE_NUMBER_POSITIONS = frozenset(
     {"top-right", "bottom-center", "bottom-right"}
 )
@@ -49,11 +61,11 @@ MARK_BOLD = "bold"
 MARK_ITALIC = "italic"
 MARK_UNDERLINE = "underline"
 MARK_STRIKETHROUGH = "strikethrough"
-MARK_SCRIPT = "script"
-MARK_COLOR = "color"
 MARK_HIGHLIGHT = "highlight"
+MARK_COLOR = "color"
 MARK_FONT_FAMILY = "fontFamily"
 MARK_FONT_SIZE = "fontSize"
+MARK_SCRIPT = "script"
 MARK_LINK = "link"
 MARK_CODE = "code"
 
@@ -63,33 +75,83 @@ _VALID_MARK_TYPES = frozenset(
         MARK_ITALIC,
         MARK_UNDERLINE,
         MARK_STRIKETHROUGH,
-        MARK_SCRIPT,
-        MARK_COLOR,
         MARK_HIGHLIGHT,
+        MARK_COLOR,
         MARK_FONT_FAMILY,
         MARK_FONT_SIZE,
+        MARK_SCRIPT,
         MARK_LINK,
         MARK_CODE,
     }
 )
-# These marks are meaningless without a 'value' (a color, a size, a URL...).
 _MARKS_REQUIRING_VALUE = frozenset(
     {
-        MARK_SCRIPT,
-        MARK_COLOR,
         MARK_HIGHLIGHT,
+        MARK_COLOR,
         MARK_FONT_FAMILY,
         MARK_FONT_SIZE,
+        MARK_SCRIPT,
         MARK_LINK,
     }
 )
 _SCRIPT_VALUES = frozenset({"superscript", "subscript"})
-
+_TEXT_ALIGNMENTS = frozenset({"left", "center", "right", "justify"})
+_ORIENTATIONS = frozenset({"portrait", "landscape"})
 _auto_id = itertools.count(1)
 
 
 def _next_id() -> str:
     return f"node-{next(_auto_id)}"
+
+
+def _copy_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    return dict(value or {})
+
+
+def _validate_span(name: str, value: Any) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise DocumentBuildError(
+            f"'{name}' must be a positive integer, got: {value!r}"
+        )
+
+
+def _validate_styles(styles: dict[str, Any]) -> None:
+    """Validate known styles while retaining unknown OOXML properties."""
+    text_align = styles.get("textAlign")
+    if text_align is not None and text_align not in _TEXT_ALIGNMENTS:
+        raise DocumentBuildError(
+            f"'textAlign' must be one of {sorted(_TEXT_ALIGNMENTS)}, "
+            f"got: {text_align!r}"
+        )
+
+    orientation = styles.get("orientation")
+    if orientation is not None and orientation not in _ORIENTATIONS:
+        raise DocumentBuildError(
+            f"'orientation' must be one of {sorted(_ORIENTATIONS)}, "
+            f"got: {orientation!r}"
+        )
+
+    margins = styles.get("margins")
+    if margins is not None and not isinstance(margins, dict):
+        raise DocumentBuildError("'margins' must be a JSON object.")
+
+    borders = styles.get("borders")
+    if borders is not None and not isinstance(borders, dict):
+        raise DocumentBuildError("'borders' must be a JSON object.")
+
+    list_level = styles.get("listLevel")
+    if list_level is not None and (
+        not isinstance(list_level, int)
+        or isinstance(list_level, bool)
+        or list_level < 0
+    ):
+        raise DocumentBuildError(
+            f"'listLevel' must be a non-negative integer, got: {list_level!r}"
+        )
+
+    for span in ("colSpan", "rowSpan"):
+        if span in styles:
+            _validate_span(span, styles[span])
 
 
 @dataclass(frozen=True)
@@ -104,28 +166,27 @@ class Mark:
             raise DocumentBuildError(f"Mark '{self.type}' requires a 'value'.")
         if self.type == MARK_SCRIPT and self.value not in _SCRIPT_VALUES:
             raise DocumentBuildError(
-                f"'script' mark value must be one of {sorted(_SCRIPT_VALUES)}, "
+                "'script' mark value must be one of "
+                f"{sorted(_SCRIPT_VALUES)}, "
                 f"got: {self.value!r}"
             )
         if self.type == MARK_LINK and not (
             isinstance(self.value, dict) and self.value.get("url")
         ):
             raise DocumentBuildError(
-                f"'link' mark value must be an object with a 'url', got: "
-                f"{self.value!r}"
+                "'link' mark value must be an object with a non-empty "
+                f"'url', got: {self.value!r}"
             )
 
     def to_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"type": self.type}
+        result: dict[str, Any] = {"type": self.type}
         if self.value is not None:
-            out["value"] = self.value
-        return out
+            result["value"] = self.value
+        return result
 
     @classmethod
-    def from_dict(cls, data: Any) -> "Mark":
+    def from_dict(cls, data: Any) -> Mark:
         if isinstance(data, str):
-            # Back-compat: accept a bare mark name ("bold") as shorthand
-            # for {"type": "bold"}.
             return cls(type=data)
         if not isinstance(data, dict) or "type" not in data:
             raise DocumentBuildError(f"Malformed mark: {data!r}")
@@ -139,234 +200,274 @@ class DocumentNode:
     id: str | None = None
     section_type: str | None = None
     marks: tuple[Mark, ...] = ()
-    children: tuple["DocumentNode", ...] = ()
+    children: tuple[DocumentNode, ...] = ()
     styles: dict[str, Any] = field(default_factory=dict)
     src: str | None = None
     alt: str | None = None
     caption: str | None = None
+    col_span: int | None = None
+    row_span: int | None = None
+    field_type: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         is_leaf = self.text is not None
         is_block = self.type is not None
-
         if is_leaf == is_block:
             raise DocumentBuildError(
                 "A document node must be either a leaf text node ('text') "
                 "or a block node ('type'), never both or neither."
             )
+        if not isinstance(self.styles, dict):
+            raise DocumentBuildError("'styles' must be a JSON object.")
+        if not isinstance(self.metadata, dict):
+            raise DocumentBuildError("'metadata' must be a JSON object.")
 
         if is_leaf:
-            if self.children:
-                raise DocumentBuildError(
-                    "A leaf text node cannot have 'children'."
-                )
-            if self.styles:
-                raise DocumentBuildError(
-                    "A leaf text node cannot have 'styles' — use 'marks'."
-                )
-            if self.src or self.alt or self.caption:
-                raise DocumentBuildError(
-                    "'src'/'alt'/'caption' only apply to 'image' nodes."
-                )
+            self._validate_text_leaf()
             return
-
         if self.type not in BLOCK_TYPES:
             raise DocumentBuildError(f"Unknown node type: {self.type!r}")
         if self.marks:
             raise DocumentBuildError("Only leaf text nodes may carry 'marks'.")
-        if not isinstance(self.styles, dict):
-            raise DocumentBuildError("'styles' must be a JSON object.")
+        _validate_styles(self.styles)
+        self._validate_block_payload()
+        self._validate_children()
 
+    def _validate_text_leaf(self) -> None:
+        if self.children:
+            raise DocumentBuildError(
+                "A leaf text node cannot have 'children'."
+            )
+        if self.styles:
+            raise DocumentBuildError(
+                "A leaf text node cannot have 'styles' — use 'marks'."
+            )
+        block_properties = (
+            self.src,
+            self.alt,
+            self.caption,
+            self.col_span,
+            self.row_span,
+            self.field_type,
+        )
+        if (
+            any(value is not None for value in block_properties)
+            or self.metadata
+        ):
+            raise DocumentBuildError(
+                "A leaf text node cannot carry block-node properties."
+            )
+
+    def _validate_block_payload(self) -> None:
         if self.type == IMAGE:
-            if self.children:
-                raise DocumentBuildError(
-                    "An 'image' node cannot have 'children'."
-                )
             if not self.src:
                 raise DocumentBuildError("An 'image' node requires 'src'.")
-            return
-
-        if self.type == TABLE_OF_CONTENTS:
-            if self.children:
-                raise DocumentBuildError(
-                    "A 'table-of-contents' node cannot have 'children' — "
-                    "it is a non-editable widget, not rich text. The real, "
-                    "paginated entries are computed by the PDF exporter "
-                    "itself from the heading-1/heading-2 paragraphs "
-                    "rendered elsewhere in the document — this node is a "
-                    "pure placeholder and carries no data of its own."
-                )
-            if self.src or self.alt or self.caption:
-                raise DocumentBuildError(
-                    "'src'/'alt'/'caption' only apply to 'image' nodes."
-                )
-            return
-
-        if self.type == PAGE_BREAK:
-            if self.children:
-                raise DocumentBuildError(
-                    "A 'page-break' node cannot have 'children'."
-                )
-            if self.src or self.alt or self.caption:
-                raise DocumentBuildError(
-                    "A 'page-break' node cannot carry 'src'/'alt'/'caption'."
-                )
-            return
-
-        if self.src or self.alt or self.caption:
+        elif self.src is not None or self.alt is not None:
             raise DocumentBuildError(
-                "'src'/'alt'/'caption' only apply to 'image' nodes."
+                "'src'/'alt' only apply to 'image' nodes."
             )
-        if not self.children:
+
+        if self.caption is not None and self.type not in {IMAGE, TABLE}:
+            raise DocumentBuildError(
+                "'caption' only applies to 'image' and 'table' nodes."
+            )
+
+        if self.col_span is not None:
+            _validate_span("colSpan", self.col_span)
+        if self.row_span is not None:
+            _validate_span("rowSpan", self.row_span)
+        if (self.col_span is not None or self.row_span is not None) and (
+            self.type != TABLE_CELL
+        ):
+            raise DocumentBuildError(
+                "'colSpan'/'rowSpan' only apply to 'table-cell' nodes."
+            )
+
+        if self.type == FIELD:
+            if (
+                not isinstance(self.field_type, str)
+                or not self.field_type.strip()
+            ):
+                raise DocumentBuildError(
+                    "A 'field' node requires a non-empty 'field_type'."
+                )
+        elif self.field_type is not None:
+            raise DocumentBuildError(
+                "'field_type' only applies to 'field' nodes."
+            )
+
+    def _validate_children(self) -> None:
+        if self.type in ATOMIC_BLOCK_TYPES:
+            if self.children:
+                raise DocumentBuildError(
+                    f"A '{self.type}' node cannot have 'children'."
+                )
+            return
+
+        if not self.children and self.type != BOOKMARK:
             raise DocumentBuildError(
                 f"Block node '{self.type}' must have at least one child."
             )
-        if self.type in LIST_TYPES:
-            if any(c.type != LIST_ITEM for c in self.children):
-                raise DocumentBuildError(
-                    f"'{self.type}' children must all be '{LIST_ITEM}' nodes."
-                )
-        if self.type == LIST_ITEM:
-            if any(c.text is None for c in self.children):
-                raise DocumentBuildError(
-                    "'list-item' children must all be leaf text nodes."
-                )
-        if self.type == TABLE:
-            if any(c.type != TABLE_ROW for c in self.children):
-                raise DocumentBuildError(
-                    f"'{TABLE}' children must all be '{TABLE_ROW}' nodes."
-                )
-        if self.type == TABLE_ROW:
-            if any(c.type != TABLE_CELL for c in self.children):
-                raise DocumentBuildError(
-                    f"'{TABLE_ROW}' children must all be '{TABLE_CELL}' "
-                    "nodes."
-                )
-        if self.type == TABLE_CELL:
-            if any(c.text is not None for c in self.children):
-                raise DocumentBuildError(
-                    f"'{TABLE_CELL}' children must be block nodes (e.g. "
-                    "'paragraph'), not bare leaf text nodes."
-                )
+        if self.type in LIST_TYPES and any(
+            child.type != LIST_ITEM for child in self.children
+        ):
+            raise DocumentBuildError(
+                f"'{self.type}' children must all be '{LIST_ITEM}' nodes."
+            )
+        if self.type == TABLE and any(
+            child.type != TABLE_ROW for child in self.children
+        ):
+            raise DocumentBuildError(
+                f"'{TABLE}' children must all be '{TABLE_ROW}' nodes."
+            )
+        if self.type == TABLE_ROW and any(
+            child.type != TABLE_CELL for child in self.children
+        ):
+            raise DocumentBuildError(
+                f"'{TABLE_ROW}' children must all be '{TABLE_CELL}' nodes."
+            )
+        if self.type == TABLE_CELL and any(
+            child.text is not None or child.type not in _CELL_BLOCK_TYPES
+            for child in self.children
+        ):
+            raise DocumentBuildError(
+                f"'{TABLE_CELL}' children must be content block nodes, "
+                "not bare text or inline-only nodes."
+            )
+        hyperlink_children = INLINE_ATOMIC_TYPES | {BOOKMARK}
+        if self.type == HYPERLINK and any(
+            child.text is None and child.type not in hyperlink_children
+            for child in self.children
+        ):
+            raise DocumentBuildError(
+                "A 'hyperlink' may contain text, fields, tabs, or bookmarks."
+            )
+        if self.type == BOOKMARK and any(
+            child.text is None and child.type not in INLINE_ATOMIC_TYPES
+            for child in self.children
+        ):
+            raise DocumentBuildError(
+                "A 'bookmark' may contain only text, fields, or tabs."
+            )
 
     def plain_text(self) -> str:
         if self.text is not None:
             return self.text
         if self.type == IMAGE:
             return self.caption or self.alt or ""
-        if self.type in (TABLE_OF_CONTENTS, PAGE_BREAK):
+        if self.type in ATOMIC_BLOCK_TYPES:
             return ""
-        return "".join(c.plain_text() for c in self.children)
+        return "".join(child.plain_text() for child in self.children)
 
     def to_dict(self) -> dict[str, Any]:
         if self.text is not None:
-            out: dict[str, Any] = {"text": self.text}
+            result: dict[str, Any] = {"text": self.text}
             if self.marks:
-                out["marks"] = [m.to_dict() for m in self.marks]
-            return out
+                result["marks"] = [mark.to_dict() for mark in self.marks]
+            return result
 
-        out: dict[str, Any] = {"type": self.type}
+        result = {"type": self.type}
         if self.id:
-            out["id"] = self.id
+            result["id"] = self.id
         if self.section_type:
-            out["section_type"] = self.section_type
+            result["section_type"] = self.section_type
         if self.styles:
-            out["styles"] = dict(self.styles)
-
-        if self.type == IMAGE:
-            out["src"] = self.src
-            if self.alt:
-                out["alt"] = self.alt
-            if self.caption:
-                out["caption"] = self.caption
-            return out
-
-        if self.type == TABLE_OF_CONTENTS:
-            return out
-
-        if self.type == PAGE_BREAK:
-            return out
-
-        out["children"] = [c.to_dict() for c in self.children]
-        return out
+            result["styles"] = dict(self.styles)
+        if self.src is not None:
+            result["src"] = self.src
+        if self.alt is not None:
+            result["alt"] = self.alt
+        if self.caption is not None:
+            result["caption"] = self.caption
+        if self.col_span is not None:
+            result["colSpan"] = self.col_span
+        if self.row_span is not None:
+            result["rowSpan"] = self.row_span
+        if self.field_type is not None:
+            result["field_type"] = self.field_type
+        if self.metadata:
+            result["metadata"] = dict(self.metadata)
+        if self.type not in ATOMIC_BLOCK_TYPES:
+            result["children"] = [child.to_dict() for child in self.children]
+        return result
 
     @classmethod
-    def from_dict(
-        cls, data: Any, *, assign_ids: bool = True
-    ) -> "DocumentNode":
+    def from_dict(cls, data: Any, *, assign_ids: bool = True) -> DocumentNode:
         if not isinstance(data, dict):
             raise DocumentBuildError(
                 f"Node must be a JSON object, got: {data!r}"
             )
-
         if "text" in data:
+            if "type" in data:
+                raise DocumentBuildError(
+                    "A node cannot contain both 'text' and 'type'."
+                )
             text = data["text"]
             if not isinstance(text, str):
                 raise DocumentBuildError(
                     f"Leaf 'text' must be a string, got: {text!r}"
                 )
-            marks = tuple(Mark.from_dict(m) for m in (data.get("marks") or ()))
-            return cls(text=text, marks=marks)
+            raw_marks = data.get("marks") or ()
+            if not isinstance(raw_marks, (list, tuple)):
+                raise DocumentBuildError("'marks' must be a JSON array.")
+            return cls(
+                text=text,
+                marks=tuple(Mark.from_dict(mark) for mark in raw_marks),
+            )
 
-        node_type = data.get("type")
-        node_id = data.get("id") or (_next_id() if assign_ids else None)
         styles = data.get("styles") or {}
+        metadata = data.get("metadata") or {}
+        raw_children = data.get("children") or ()
         if not isinstance(styles, dict):
-            raise DocumentBuildError(
-                f"'styles' must be a JSON object, got: {styles!r}"
-            )
+            raise DocumentBuildError("'styles' must be a JSON object.")
+        if not isinstance(metadata, dict):
+            raise DocumentBuildError("'metadata' must be a JSON object.")
+        if not isinstance(raw_children, (list, tuple)):
+            raise DocumentBuildError("'children' must be a JSON array.")
 
-        if node_type == IMAGE:
-            return cls(
-                type=node_type,
-                id=node_id,
-                section_type=data.get("section_type"),
-                styles=styles,
-                src=data.get("src"),
-                alt=data.get("alt"),
-                caption=data.get("caption"),
-            )
-
-        if node_type == TABLE_OF_CONTENTS:
-            return cls(
-                type=node_type,
-                id=node_id,
-                section_type=data.get("section_type"),
-                styles=styles,
-            )
-
-        if node_type == PAGE_BREAK:
-            return cls(
-                type=node_type,
-                id=node_id,
-                section_type=data.get("section_type"),
-            )
-
-        raw_children = data.get("children")
-        if not raw_children:
-            raise DocumentBuildError(
-                f"Block node '{node_type}' is missing 'children'."
-            )
-        children = tuple(
-            cls.from_dict(c, assign_ids=assign_ids) for c in raw_children
-        )
         return cls(
-            type=node_type,
-            id=node_id,
+            type=data.get("type"),
+            id=data.get("id") or (_next_id() if assign_ids else None),
             section_type=data.get("section_type"),
-            styles=styles,
-            children=children,
+            styles=dict(styles),
+            children=tuple(
+                cls.from_dict(child, assign_ids=assign_ids)
+                for child in raw_children
+            ),
+            src=data.get("src"),
+            alt=data.get("alt"),
+            caption=data.get("caption"),
+            col_span=data.get("colSpan", data.get("col_span")),
+            row_span=data.get("rowSpan", data.get("row_span")),
+            field_type=data.get("field_type", data.get("fieldType")),
+            metadata=dict(metadata),
         )
+
+
+_CELL_BLOCK_TYPES = (
+    HEADING_TYPES
+    | LIST_TYPES
+    | NOTE_TYPES
+    | {
+        PARAGRAPH,
+        BLOCK_QUOTE,
+        TABLE,
+        PAGE_BREAK,
+        SECTION_BREAK,
+        TABLE_OF_CONTENTS,
+        IMAGE,
+    }
+)
 
 
 def text_node(
     text: str, *, marks: Sequence[Mark | str] | None = None
 ) -> DocumentNode:
-    resolved: tuple[Mark, ...] = ()
-    if marks:
-        resolved = tuple(
-            m if isinstance(m, Mark) else Mark(type=m) for m in marks
-        )
+    resolved = tuple(
+        mark if isinstance(mark, Mark) else Mark(type=mark)
+        for mark in (marks or ())
+    )
     return DocumentNode(text=text, marks=resolved)
 
 
@@ -376,14 +477,16 @@ def block_node(
     *,
     section_type: str | None = None,
     node_id: str | None = None,
-    styles: dict[str, Any] | None = None,
+    styles: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> DocumentNode:
     return DocumentNode(
         type=node_type,
         children=tuple(children),
         section_type=section_type,
         id=node_id or _next_id(),
-        styles=dict(styles or {}),
+        styles=_copy_mapping(styles),
+        metadata=_copy_mapping(metadata),
     )
 
 
@@ -394,44 +497,174 @@ def image_node(
     caption: str | None = None,
     section_type: str | None = None,
     node_id: str | None = None,
-    styles: dict[str, Any] | None = None,
+    styles: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> DocumentNode:
     return DocumentNode(
         type=IMAGE,
         id=node_id or _next_id(),
         section_type=section_type,
-        styles=dict(styles or {}),
+        styles=_copy_mapping(styles),
         src=src,
         alt=alt,
         caption=caption,
+        metadata=_copy_mapping(metadata),
     )
 
 
 def page_break_node(
-        *,
-        section_type: str | None = None,
-        node_id: str | None = None
-    ) -> DocumentNode:
+    *,
+    section_type: str | None = None,
+    node_id: str | None = None,
+    styles: Mapping[str, Any] | None = None,
+) -> DocumentNode:
     return DocumentNode(
         type=PAGE_BREAK,
         id=node_id or _next_id(),
         section_type=section_type,
+        styles=_copy_mapping(styles),
+    )
+
+
+def section_break_node(
+    *,
+    break_type: str = "next-page",
+    section_type: str | None = None,
+    node_id: str | None = None,
+    styles: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> DocumentNode:
+    node_metadata = {"breakType": break_type, **_copy_mapping(metadata)}
+    return DocumentNode(
+        type=SECTION_BREAK,
+        id=node_id or _next_id(),
+        section_type=section_type,
+        styles=_copy_mapping(styles),
+        metadata=node_metadata,
+    )
+
+
+def field_node(
+    field_type: str,
+    *,
+    node_id: str | None = None,
+    styles: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> DocumentNode:
+    return DocumentNode(
+        type=FIELD,
+        id=node_id or _next_id(),
+        field_type=field_type,
+        styles=_copy_mapping(styles),
+        metadata=_copy_mapping(metadata),
+    )
+
+
+def tab_node(
+    *,
+    node_id: str | None = None,
+    styles: Mapping[str, Any] | None = None,
+) -> DocumentNode:
+    return DocumentNode(
+        type=TAB,
+        id=node_id or _next_id(),
+        styles=_copy_mapping(styles),
+    )
+
+
+def hyperlink_node(
+    children: Sequence[DocumentNode],
+    url: str,
+    *,
+    node_id: str | None = None,
+    styles: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> DocumentNode:
+    if not url:
+        raise DocumentBuildError("A 'hyperlink' node requires a URL.")
+    node_metadata = {"url": url, **_copy_mapping(metadata)}
+    return DocumentNode(
+        type=HYPERLINK,
+        id=node_id or _next_id(),
+        children=tuple(children),
+        styles=_copy_mapping(styles),
+        metadata=node_metadata,
+    )
+
+
+def bookmark_node(
+    name: str,
+    children: Sequence[DocumentNode] = (),
+    *,
+    node_id: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> DocumentNode:
+    if not name:
+        raise DocumentBuildError("A 'bookmark' node requires a name.")
+    node_metadata = {"name": name, **_copy_mapping(metadata)}
+    return DocumentNode(
+        type=BOOKMARK,
+        id=node_id or _next_id(),
+        children=tuple(children),
+        metadata=node_metadata,
+    )
+
+
+def footnote_node(
+    children: Sequence[DocumentNode],
+    *,
+    note_id: str | None = None,
+    node_id: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> DocumentNode:
+    return _note_node(FOOTNOTE, children, note_id, node_id, metadata)
+
+
+def endnote_node(
+    children: Sequence[DocumentNode],
+    *,
+    note_id: str | None = None,
+    node_id: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> DocumentNode:
+    return _note_node(ENDNOTE, children, note_id, node_id, metadata)
+
+
+def _note_node(
+    node_type: str,
+    children: Sequence[DocumentNode],
+    note_id: str | None,
+    node_id: str | None,
+    metadata: Mapping[str, Any] | None,
+) -> DocumentNode:
+    node_metadata = _copy_mapping(metadata)
+    if note_id is not None:
+        node_metadata["noteId"] = note_id
+    return DocumentNode(
+        type=node_type,
+        id=node_id or _next_id(),
+        children=tuple(children),
+        metadata=node_metadata,
     )
 
 
 def table_node(
     rows: Sequence[DocumentNode],
     *,
+    caption: str | None = None,
     section_type: str | None = None,
     node_id: str | None = None,
-    styles: dict[str, Any] | None = None,
+    styles: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> DocumentNode:
     return DocumentNode(
         type=TABLE,
         children=tuple(rows),
         section_type=section_type,
         id=node_id or _next_id(),
-        styles=dict(styles or {}),
+        styles=_copy_mapping(styles),
+        caption=caption,
+        metadata=_copy_mapping(metadata),
     )
 
 
@@ -439,27 +672,35 @@ def table_row_node(
     cells: Sequence[DocumentNode],
     *,
     node_id: str | None = None,
-    styles: dict[str, Any] | None = None,
+    styles: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> DocumentNode:
     return DocumentNode(
         type=TABLE_ROW,
         children=tuple(cells),
         id=node_id or _next_id(),
-        styles=dict(styles or {}),
+        styles=_copy_mapping(styles),
+        metadata=_copy_mapping(metadata),
     )
 
 
 def table_cell_node(
     children: Sequence[DocumentNode],
     *,
+    col_span: int | None = None,
+    row_span: int | None = None,
     node_id: str | None = None,
-    styles: dict[str, Any] | None = None,
+    styles: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> DocumentNode:
     return DocumentNode(
         type=TABLE_CELL,
         children=tuple(children),
         id=node_id or _next_id(),
-        styles=dict(styles or {}),
+        styles=_copy_mapping(styles),
+        col_span=col_span,
+        row_span=row_span,
+        metadata=_copy_mapping(metadata),
     )
 
 
@@ -467,9 +708,13 @@ def table_of_contents_node(
     *,
     section_type: str | None = None,
     node_id: str | None = None,
+    styles: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> DocumentNode:
     return DocumentNode(
         type=TABLE_OF_CONTENTS,
         id=node_id or _next_id(),
         section_type=section_type,
+        styles=_copy_mapping(styles),
+        metadata=_copy_mapping(metadata),
     )

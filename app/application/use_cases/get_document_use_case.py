@@ -9,9 +9,13 @@ from application.exceptions import (
     DocumentAccessDeniedError,
     DocumentNotFoundError,
 )
-from application.ports.document_buffer_port import DocumentBufferPort
 from application.ports.document_exporter_port import DocumentExporterPort
 from application.ports.document_repository_port import DocumentRepositoryPort
+from application.ports.docx_cache_port import DocxCachePort
+from application.services.document_docx_cache import (
+    cache_docx,
+    get_cached_docx,
+)
 
 
 class GetDocumentUseCase:
@@ -19,11 +23,11 @@ class GetDocumentUseCase:
         self,
         document_repository: DocumentRepositoryPort,
         exporter: DocumentExporterPort,
-        buffer: DocumentBufferPort,
+        cache: DocxCachePort,
     ) -> None:
         self._documents = document_repository
         self._exporter = exporter
-        self._buffer = buffer
+        self._cache = cache
 
     async def execute(
         self, document_id: UUID, user_id: UUID
@@ -52,13 +56,25 @@ class GetDocumentUseCase:
             created_at=document.created_at,
             updated_at=document.updated_at,
         )
-        exported = await self._exporter.export(document)
-        await self._buffer.put(document.id, exported)
-        if exported.file_bytes is None:
-            raise RuntimeError("The DOCX exporter returned no binary content.")
+        docx_bytes = await get_cached_docx(self._cache, document)
+        file_name = f"{document.id}.docx"
+        content_type = (
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document"
+        )
+        if docx_bytes is None:
+            exported = await self._exporter.export(document)
+            if exported.file_bytes is None:
+                raise RuntimeError(
+                    "The DOCX exporter returned no binary content."
+                )
+            docx_bytes = exported.file_bytes
+            file_name = exported.file_name or file_name
+            content_type = exported.content_type or content_type
+            await cache_docx(self._cache, document, docx_bytes)
         return DocumentFileOutput(
             document=metadata,
-            file_bytes=exported.file_bytes,
-            file_name=exported.file_name or f"{document.id}.docx",
-            content_type=exported.content_type or "application/octet-stream",
+            file_bytes=docx_bytes,
+            file_name=file_name,
+            content_type=content_type,
         )

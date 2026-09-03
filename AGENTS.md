@@ -167,8 +167,7 @@ uv run ruff check .
 Use `uv run ruff format --check .` when only verifying formatting. Before
 finishing a code change, run at least `uv run ruff format .` and
 `uv run ruff check .`, then run the relevant tests if a test suite exists for
-the changed area. There is currently no committed automated test suite, so new
-behavior should include focused tests when the necessary test setup is added.
+the changed area. Add focused tests for new behavior under `tests/`.
 
 The application expects environment variables for the integrations it wires,
 including:
@@ -181,6 +180,8 @@ including:
 - `GOOGLE_TOKEN_ENCRYPTION_KEY`
 - `GOOGLE_OAUTH_CLIENT_ID`
 - `GOOGLE_OAUTH_CLIENT_SECRET`
+- `DOCX_CACHE_DIR` (optional; defaults to `./storage/cache/docx`)
+- `DOCX_CACHE_SIZE_MB` (optional; defaults to `1024`)
 
 Do not add real values to the repository.
 
