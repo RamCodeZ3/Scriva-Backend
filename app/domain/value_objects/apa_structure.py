@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from domain.value_objects.document_node import HEADING_1, DocumentNode
+from domain.value_objects.document_node import (
+    HEADING_1,
+    PAGE_NUMBER_POSITIONS,
+    DocumentNode,
+)
 
 
 class APASectionType(Enum):
@@ -38,7 +42,25 @@ APA7_DOCUMENT_STYLES: dict[str, Any] = {
     "pageSize": "letter",
     "orientation": "portrait",
     "lineHeight": 2.0,
+    "showPageNumbers": True,
+    "pageNumberPosition": "top-right",
 }
+
+
+def normalize_document_styles(
+    document_styles: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge user/document-level overrides on top of the APA 7 defaults,
+    normalizing the foliation fields so the exporter never has to guard
+    against a bad or unknown 'pageNumberPosition'."""
+    merged = {**APA7_DOCUMENT_STYLES, **(document_styles or {})}
+
+    position = str(merged.get("pageNumberPosition", "top-right")).lower()
+    if position not in PAGE_NUMBER_POSITIONS:
+        position = "top-right"
+    merged["pageNumberPosition"] = position
+    merged["showPageNumbers"] = bool(merged.get("showPageNumbers", True))
+    return merged
 
 
 @dataclass(frozen=True)

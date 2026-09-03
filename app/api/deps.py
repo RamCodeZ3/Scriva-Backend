@@ -4,18 +4,13 @@ import os
 from functools import lru_cache
 from uuid import UUID
 
-from fastapi import Depends, Header, HTTPException, status
-
-from domain.entities.source import SourceType
-from domain.entities.user import User
-
-from dotenv import load_dotenv
-
 from application.ports.document_exporter_resolver_port import (
     DocumentExporterResolverPort,
 )
+from application.ports.document_parser_port import DocumentParserPort
 from application.ports.document_repository_port import DocumentRepositoryPort
 from application.ports.document_writer_port import DocumentWriterPort
+from application.ports.docx_cache_port import DocxCachePort
 from application.ports.extractor_factory_port import ExtractorFactoryPort
 from application.ports.google_credentials_port import GoogleCredentialsPort
 from application.ports.source_repository_port import SourceRepositoryPort
@@ -33,16 +28,23 @@ from application.use_cases.export_document_use_case import (
     ExportDocumentUseCase,
 )
 from application.use_cases.get_document_use_case import GetDocumentUseCase
+from application.use_cases.get_user_source_use_case import GetUserSourceUseCase
+from application.use_cases.list_user_documents_use_case import (
+    ListUserDocumentsUseCase,
+)
+from application.use_cases.list_user_sources_use_case import (
+    ListUserSourcesUseCase,
+)
 from application.use_cases.process_document_use_case import (
     ProcessDocumentUseCase,
 )
 from application.use_cases.update_document_use_case import (
     UpdateDocumentUseCase,
 )
-from application.use_cases.list_user_documents_use_case import (
-    ListUserDocumentsUseCase,
-)
-
+from domain.entities.source import SourceType
+from domain.entities.user import User
+from dotenv import load_dotenv
+from fastapi import Depends, Header, HTTPException, status
 from infrastructure.ai.gemini_document_writer_adapter import (
     GeminiDocumentWriterAdapter,
 )
@@ -53,8 +55,12 @@ from infrastructure.auth.supabase_jwt_auth import (
     InvalidTokenError,
     SupabaseJWTAuth,
 )
+from infrastructure.cache.local_docx_cache import LocalDocxCacheService
 from infrastructure.export.document_exporter_resolver_adapter import (
     DocumentExporterResolverAdapter,
+)
+from infrastructure.export.docx_document_exporter_adapter import (
+    DocxDocumentExporterAdapter,
 )
 from infrastructure.export.pdf_document_exporter_adapter import (
     PdfDocumentExporterAdapter,
@@ -75,6 +81,9 @@ from infrastructure.extractors.youtube_extractor_adapter import (
 from infrastructure.jobs.sync_job_dispatcher_adapter import (
     SyncJobDispatcherAdapter,
 )
+from infrastructure.parsers.docx_document_parser_adapter import (
+    DocxDocumentParserAdapter,
+)
 from infrastructure.persistence.supabase_client import build_supabase_client
 from infrastructure.persistence.supabase_document_repository import (
     SupabaseDocumentRepository,
@@ -88,7 +97,6 @@ from infrastructure.persistence.supabase_source_repository import (
 from infrastructure.persistence.supabase_user_repository import (
     SupabaseUserRepository,
 )
-
 
 # ── Process-wide singletons ─────────────────────────────────────────────
 
@@ -151,6 +159,25 @@ def get_pdf_document_exporter() -> PdfDocumentExporterAdapter:
 
 
 @lru_cache
+def get_docx_document_exporter() -> DocxDocumentExporterAdapter:
+    return DocxDocumentExporterAdapter()
+
+
+@lru_cache
+def get_document_parser() -> DocumentParserPort:
+    return DocxDocumentParserAdapter()
+
+
+@lru_cache
+def get_docx_cache() -> DocxCachePort:
+    cache_size_mb = int(os.environ.get("DOCX_CACHE_SIZE_MB", "1024"))
+    return LocalDocxCacheService(
+        directory=os.environ.get("DOCX_CACHE_DIR", "./storage/cache/docx"),
+        size_limit=cache_size_mb * 1024**2,
+    )
+
+
+@lru_cache
 def get_document_exporter_resolver() -> DocumentExporterResolverPort:
     return DocumentExporterResolverAdapter(
         pdf_exporter=get_pdf_document_exporter(),
@@ -180,14 +207,18 @@ def get_document_repository(
 
 
 async def get_current_user_id(
-    authorization: str = Header(..., alias="Authorization"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
     jwt_auth: SupabaseJWTAuth = Depends(get_jwt_auth),
 ) -> UUID:
+    authorization = authorization or ""
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or malformed Authorization header. Expected: 'Bearer <token>'.",
+            detail=(
+                "Missing or malformed Authorization header. Expected: "
+                "'Bearer <token>'."
+            ),
         )
 
     try:
@@ -222,7 +253,9 @@ async def get_current_user(
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account is not registered in the documents service yet.",
+            detail=(
+                "This account is not registered in the documents service yet."
+            ),
         )
     return user
 
@@ -255,6 +288,8 @@ def get_create_document_use_case(
     process_use_case: ProcessDocumentUseCase = Depends(
         get_process_document_use_case
     ),
+    exporter=Depends(get_docx_document_exporter),
+    cache: DocxCachePort = Depends(get_docx_cache),
 ) -> CreateDocumentUseCase:
     dispatcher = SyncJobDispatcherAdapter(process_use_case)
     return CreateDocumentUseCase(
@@ -262,6 +297,8 @@ def get_create_document_use_case(
         source_repository=source_repository,
         user_repository=user_repository,
         job_dispatcher=dispatcher,
+        exporter=exporter,
+        cache=cache,
     )
 
 
@@ -269,24 +306,30 @@ def get_get_document_use_case(
     document_repository: DocumentRepositoryPort = Depends(
         get_document_repository
     ),
+    exporter=Depends(get_docx_document_exporter),
+    cache: DocxCachePort = Depends(get_docx_cache),
 ) -> GetDocumentUseCase:
-    return GetDocumentUseCase(document_repository)
+    return GetDocumentUseCase(document_repository, exporter, cache)
 
 
 def get_update_document_use_case(
     document_repository: DocumentRepositoryPort = Depends(
         get_document_repository
     ),
+    parser: DocumentParserPort = Depends(get_document_parser),
+    exporter=Depends(get_docx_document_exporter),
+    cache: DocxCachePort = Depends(get_docx_cache),
 ) -> UpdateDocumentUseCase:
-    return UpdateDocumentUseCase(document_repository)
+    return UpdateDocumentUseCase(document_repository, parser, exporter, cache)
 
 
 def get_delete_document_use_case(
     document_repository: DocumentRepositoryPort = Depends(
         get_document_repository
     ),
+    cache: DocxCachePort = Depends(get_docx_cache),
 ) -> DeleteDocumentUseCase:
-    return DeleteDocumentUseCase(document_repository)
+    return DeleteDocumentUseCase(document_repository, cache)
 
 
 def get_augment_document_use_case(
@@ -296,12 +339,16 @@ def get_augment_document_use_case(
     source_repository: SourceRepositoryPort = Depends(get_source_repository),
     extractor_factory: ExtractorFactoryPort = Depends(get_extractor_factory),
     document_writer: DocumentWriterPort = Depends(get_document_writer),
+    exporter=Depends(get_docx_document_exporter),
+    cache: DocxCachePort = Depends(get_docx_cache),
 ) -> AugmentDocumentUseCase:
     return AugmentDocumentUseCase(
         document_repository=document_repository,
         source_repository=source_repository,
         extractor_factory=extractor_factory,
         document_writer=document_writer,
+        exporter=exporter,
+        cache=cache,
     )
 
 
@@ -329,3 +376,15 @@ def get_list_user_documents_use_case(
         document_repository=document_repository,
         user_repository=user_repository,
     )
+
+
+def get_list_user_sources_use_case(
+    source_repository: SourceRepositoryPort = Depends(get_source_repository),
+) -> ListUserSourcesUseCase:
+    return ListUserSourcesUseCase(source_repository)
+
+
+def get_get_user_source_use_case(
+    source_repository: SourceRepositoryPort = Depends(get_source_repository),
+) -> GetUserSourceUseCase:
+    return GetUserSourceUseCase(source_repository)

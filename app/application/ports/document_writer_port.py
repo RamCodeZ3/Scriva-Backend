@@ -29,7 +29,6 @@ class DocumentWriterPort(ABC):
         existing_references: list[SourceReference],
         new_content: str,
         document_type: DocumentType,
-        presentation: PresentationInfo,
         additional_notes: str | None = None,
     ) -> tuple[str, list[APASection], list[SourceReference]]:
         """

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -68,28 +69,34 @@ class Source:
     source_type: SourceType
     raw: str
     status: SourceStatus
+    user_id: UUID | None = None
     file_kind: FileKind | None = None
     content: str | None = None
     char_count: int | None = None
     error_message: str | None = None
+    created_at: datetime | None = None
 
     @classmethod
-    def create(cls, raw: str, source_type: SourceType) -> Source:
+    def create(
+        cls, raw: str, source_type: SourceType, user_id: UUID
+    ) -> Source:
         return cls(
             id=uuid4(),
             source_type=source_type,
             raw=raw,
             status=SourceStatus.PENDING,
+            user_id=user_id,
         )
 
     @classmethod
-    def create_auto(cls, raw: str) -> Source:
+    def create_auto(cls, raw: str, user_id: UUID) -> Source:
         source_type, file_kind = classify_source(raw)
         return cls(
             id=uuid4(),
             source_type=source_type,
             raw=raw,
             status=SourceStatus.PENDING,
+            user_id=user_id,
             file_kind=file_kind,
         )
 
@@ -110,6 +117,7 @@ class Source:
     def get_content(self) -> str:
         if not self.is_ready() or self.content is None:
             raise InvalidSourceError(
-                f"Source is not ready for use. Current status: '{self.status.value}'."
+                "Source is not ready for use. Current status: "
+                f"'{self.status.value}'."
             )
         return self.content
