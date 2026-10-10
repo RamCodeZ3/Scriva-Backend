@@ -4,14 +4,16 @@ import asyncio
 import unittest
 from typing import Any
 
+import httpx
 from application.exceptions import AIProvidersExhaustedError
 from application.ports.document_writer_port import (
     AIWriterMetadata,
     DocumentWriterResult,
 )
-from domain.exceptions import InvalidSourceError
+from domain.exceptions import DocumentBuildError, InvalidSourceError
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
+from groq import NotFoundError
 from infrastructure.ai.fallback_document_writer import FallbackDocumentWriter
 
 
@@ -129,6 +131,29 @@ class FallbackDocumentWriterTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured.exception.stage, "ai_generation")
         self.assertEqual(len(captured.exception.attempts), 1)
+
+    async def test_groq_not_found_is_classified_as_configuration(self) -> None:
+        response = httpx.Response(
+            404,
+            request=httpx.Request("POST", "https://api.groq.com/bad"),
+        )
+        sdk_error = NotFoundError(
+            "Unknown request URL",
+            response=response,
+            body=None,
+        )
+        wrapped = DocumentBuildError(f"Groq request failed: {sdk_error}")
+        wrapped.__cause__ = sdk_error
+        provider = _Provider("groq", error=wrapped)
+        writer = FallbackDocumentWriter([provider])
+
+        with self.assertRaises(AIProvidersExhaustedError) as captured:
+            await self._write(writer)
+
+        self.assertEqual(
+            captured.exception.attempts[0].error_kind,
+            "configuration",
+        )
 
     async def test_augmentation_uses_expansion_stage(self) -> None:
         provider = _Provider("gemini", error=RuntimeError("invalid schema"))

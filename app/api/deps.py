@@ -55,8 +55,8 @@ from infrastructure.ai.fallback_document_writer import FallbackDocumentWriter
 from infrastructure.ai.gemini_document_writer_adapter import (
     GeminiDocumentWriterAdapter,
 )
-from infrastructure.ai.openai_compatible_document_writer_adapter import (
-    OpenAICompatibleDocumentWriterAdapter,
+from infrastructure.ai.groq_document_writer_adapter import (
+    GroqDocumentWriterAdapter,
 )
 from infrastructure.auth.google_oauth_token_provider import (
     GoogleOAuthTokenProvider,
@@ -120,6 +120,9 @@ from infrastructure.persistence.supabase_user_repository import (
 # ── Process-wide singletons ─────────────────────────────────────────────
 
 
+load_dotenv()
+
+
 @lru_cache
 def get_supabase_client():
     return build_supabase_client(
@@ -162,18 +165,15 @@ def get_document_writer() -> DocumentWriterPort:
     if gemini_key:
         providers["gemini"] = GeminiDocumentWriterAdapter(
             api_key=gemini_key,
-            model_name=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
+            model_name=os.environ.get("GEMINI_MODEL", "gemini-3.6-flash"),
             max_input_tokens=int(
                 os.environ.get("GEMINI_MAX_INPUT_TOKENS", "1000000")
             ),
         )
     groq_key = os.environ.get("GROQ_API_KEY")
     if groq_key:
-        providers["groq"] = OpenAICompatibleDocumentWriterAdapter(
-            provider_name="groq",
-            base_url=os.environ.get(
-                "GROQ_BASE_URL", "https://api.groq.com/openai/v1"
-            ),
+        providers["groq"] = GroqDocumentWriterAdapter(
+            base_url=os.environ.get("GROQ_BASE_URL", "https://api.groq.com"),
             api_key=groq_key,
             model_name=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
             max_input_tokens=int(
@@ -182,7 +182,7 @@ def get_document_writer() -> DocumentWriterPort:
         )
     order = [
         name.strip()
-        for name in os.environ.get("AI_PROVIDER_ORDER", "gemini,groq").split(
+        for name in os.environ.get("AI_PROVIDER_ORDER", "groq,gemini").split(
             ","
         )
         if name.strip()

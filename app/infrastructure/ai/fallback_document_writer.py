@@ -20,6 +20,7 @@ from domain.value_objects.apa_structure import APASection
 from domain.value_objects.document_type import DocumentType
 from domain.value_objects.presentation_info import PresentationInfo
 from domain.value_objects.source_ref import SourceReference
+from groq import BadRequestError, NotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,11 @@ def _estimate_tokens(content: str) -> int:
 
 
 def _error_kind(exc: Exception) -> str:
+    if any(
+        isinstance(item, (BadRequestError, NotFoundError))
+        for item in _exception_chain(exc)
+    ):
+        return "configuration"
     detail = str(exc).casefold()
     if "429" in detail or "quota" in detail or "rate limit" in detail:
         return "rate_limit"
@@ -193,6 +199,13 @@ def _error_kind(exc: Exception) -> str:
     if isinstance(exc, DocumentBuildError):
         return "invalid_response"
     return "provider_error"
+
+
+def _exception_chain(exc: Exception):
+    current: BaseException | None = exc
+    while current is not None:
+        yield current
+        current = current.__cause__ or current.__context__
 
 
 def _failed_attempt(
